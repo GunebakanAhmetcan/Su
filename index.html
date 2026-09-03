@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" id="theme-color" content="#f2f1eb" />
+    <meta name="description" content="Günlük su tüketimini tek dokunuşla takip et." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Su" />
+    <title>Su</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <script>
+      try {
+        var savedTheme = JSON.parse(localStorage.getItem("su:settings:v1") || "{}");
+        var palettes = ["ocean", "olive", "sand", "white"];
+        var modes = ["system", "light", "dark"];
+        var palette = palettes.includes(savedTheme.palette) ? savedTheme.palette : "ocean";
+        var mode = modes.includes(savedTheme.mode) ? savedTheme.mode : "system";
+        var dark = mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.palette = palette;
+        document.documentElement.dataset.mode = mode;
+        document.documentElement.dataset.resolved = dark ? "dark" : "light";
+      } catch (_error) {
+        document.documentElement.dataset.palette = "ocean";
+        document.documentElement.dataset.mode = "system";
+        document.documentElement.dataset.resolved = "light";
+      }
+    </script>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="water-app" aria-label="Günlük su takibi">
+        <header class="topbar">
+          <div>
+            <p class="brand">SU</p>
+            <p class="date-line" id="date-line">Bugün</p>
+          </div>
+          <button class="icon-button settings-button" id="settings-button" type="button" aria-label="Ayarları aç">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" />
+            </svg>
+          </button>
+        </header>
+
+        <section class="meter-section" aria-labelledby="today-title">
+          <div class="meter-heading">
+            <p id="today-title" class="eyebrow">Bugün</p>
+            <p class="percentage" id="percentage">%0</p>
+          </div>
+          <p class="total-number" aria-live="polite">
+            <span id="total-number">0</span><small>ml</small>
+          </p>
+          <p class="status-line" id="status-line">Hedefe 2.500 ml kaldı</p>
+          <div class="scale-labels" aria-hidden="true">
+            <span>0</span>
+            <span id="half-goal">1.250</span>
+            <span id="full-goal">2.500 ml</span>
+          </div>
+          <div class="water-progress" id="water-progress" role="progressbar" aria-label="Günlük su hedefi" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <span id="progress-fill"></span>
+          </div>
+        </section>
+
+        <section class="add-section" aria-labelledby="glass-title">
+          <div class="section-heading">
+            <h2 id="glass-title">Bardak</h2>
+          </div>
+          <div class="glass-grid">
+            <button class="glass-button" type="button" data-glass="small">
+              <span class="glass-symbol glass-symbol-small" aria-hidden="true"></span>
+              <span class="glass-label">Küçük</span>
+              <span class="glass-amount" id="small-amount">200 ml</span>
+            </button>
+            <button class="glass-button" type="button" data-glass="medium">
+              <span class="glass-symbol glass-symbol-medium" aria-hidden="true"></span>
+              <span class="glass-label">Orta</span>
+              <span class="glass-amount" id="medium-amount">300 ml</span>
+            </button>
+            <button class="glass-button" type="button" data-glass="large">
+              <span class="glass-symbol glass-symbol-large" aria-hidden="true"></span>
+              <span class="glass-label">Büyük</span>
+              <span class="glass-amount" id="large-amount">400 ml</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="add-section amount-section" aria-labelledby="amount-title">
+          <div class="section-heading">
+            <h2 id="amount-title">Miktar</h2>
+          </div>
+          <div class="amount-grid">
+            <button class="amount-button" type="button" data-amount="100"><strong>100</strong><span>ml</span></button>
+            <button class="amount-button" type="button" data-amount="250"><strong>250</strong><span>ml</span></button>
+            <button class="amount-button" type="button" data-amount="500"><strong>500</strong><span>ml</span></button>
+            <div id="custom-slot"></div>
+          </div>
+        </section>
+
+        <section class="log-section" aria-labelledby="records-title">
+          <div class="section-heading">
+            <h2 id="records-title">Kayıtlar</h2>
+            <span id="record-count">Bugün</span>
+          </div>
+          <div id="entry-content"></div>
+        </section>
+
+        <section class="week-section" aria-labelledby="week-title">
+          <div class="section-heading">
+            <h2 id="week-title">Son 7 gün</h2>
+          </div>
+          <div class="week-chart" id="week-chart" role="img" aria-label="Son yedi günün su tüketimi"></div>
+        </section>
+      </section>
+    </main>
+
+    <dialog class="app-dialog" id="custom-dialog">
+      <form method="dialog" id="custom-form">
+        <div class="dialog-heading">
+          <div>
+            <h2>Özel miktar</h2>
+          </div>
+          <button class="dialog-close" value="cancel" type="submit" aria-label="Pencereyi kapat">×</button>
+        </div>
+        <label class="number-field">
+          <span>Miktar</span>
+          <span class="input-wrap">
+            <input id="custom-input" inputmode="numeric" pattern="[0-9]*" min="50" max="3000" maxlength="4" required aria-label="Özel su miktarı" />
+            <span>ml</span>
+          </span>
+        </label>
+        <div class="dialog-actions">
+          <button class="primary-action" type="submit" value="default">Kaydet ve ekle</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="app-dialog" id="settings-dialog">
+      <form method="dialog" id="settings-form">
+        <div class="dialog-heading">
+          <div>
+            <h2>Ayarlar</h2>
+          </div>
+          <button class="dialog-close" value="cancel" type="submit" aria-label="Pencereyi kapat">×</button>
+        </div>
+        <div class="theme-controls">
+          <fieldset class="theme-fieldset">
+            <legend>Renk</legend>
+            <div class="palette-grid">
+              <label class="theme-choice">
+                <input type="radio" name="palette" value="ocean" />
+                <span class="palette-option">
+                  <span class="theme-swatches ocean-swatches" aria-hidden="true"><i></i><i></i></span>
+                  <span>Deniz</span>
+                </span>
+              </label>
+              <label class="theme-choice">
+                <input type="radio" name="palette" value="olive" />
+                <span class="palette-option">
+                  <span class="theme-swatches olive-swatches" aria-hidden="true"><i></i><i></i></span>
+                  <span>Zeytin</span>
+                </span>
+              </label>
+              <label class="theme-choice">
+                <input type="radio" name="palette" value="sand" />
+                <span class="palette-option">
+                  <span class="theme-swatches sand-swatches" aria-hidden="true"><i></i><i></i></span>
+                  <span>Bej</span>
+                </span>
+              </label>
+              <label class="theme-choice">
+                <input type="radio" name="palette" value="white" />
+                <span class="palette-option">
+                  <span class="theme-swatches white-swatches" aria-hidden="true"><i></i><i></i></span>
+                  <span>Beyaz</span>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+          <fieldset class="theme-fieldset mode-fieldset">
+            <legend>Görünüm</legend>
+            <div class="mode-grid">
+              <label class="theme-choice"><input type="radio" name="mode" value="system" /><span>Sistem</span></label>
+              <label class="theme-choice"><input type="radio" name="mode" value="light" /><span>Açık</span></label>
+              <label class="theme-choice"><input type="radio" name="mode" value="dark" /><span>Koyu</span></label>
+            </div>
+          </fieldset>
+        </div>
+        <div class="settings-fields">
+          <label class="compact-field"><span>Günlük hedef</span><span class="compact-input"><input id="goal-input" inputmode="numeric" /><span>ml</span></span></label>
+          <label class="compact-field"><span>Küçük bardak</span><span class="compact-input"><input id="small-input" inputmode="numeric" /><span>ml</span></span></label>
+          <label class="compact-field"><span>Orta bardak</span><span class="compact-input"><input id="medium-input" inputmode="numeric" /><span>ml</span></span></label>
+          <label class="compact-field"><span>Büyük bardak</span><span class="compact-input"><input id="large-input" inputmode="numeric" /><span>ml</span></span></label>
+        </div>
+        <div class="dialog-actions">
+          <button class="primary-action" type="submit" value="default">Kaydet</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+      <span id="toast-message"></span>
+      <button id="toast-action" type="button">Geri al</button>
+    </div>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
