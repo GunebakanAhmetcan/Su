@@ -39,12 +39,22 @@
             <p class="brand">SU</p>
             <p class="date-line" id="date-line">Bugün</p>
           </div>
-          <button class="icon-button settings-button" id="settings-button" type="button" aria-label="Ayarları aç">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
-              <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" />
-            </svg>
-          </button>
+          <div class="topbar-actions">
+            <button class="icon-button" id="together-button" type="button" aria-label="Birlikte bölümünü aç">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M16 20v-1.7a3.3 3.3 0 0 0-3.3-3.3H6.3A3.3 3.3 0 0 0 3 18.3V20" />
+                <circle cx="9.5" cy="8" r="3.2" />
+                <path d="M16 5.1a3.2 3.2 0 0 1 0 6.2M21 20v-1.7a3.3 3.3 0 0 0-2.5-3.2" />
+              </svg>
+              <span class="connection-dot" id="connection-dot" hidden></span>
+            </button>
+            <button class="icon-button" id="settings-button" type="button" aria-label="Ayarları aç">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+                <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" />
+              </svg>
+            </button>
+          </div>
         </header>
 
         <section class="meter-section" aria-labelledby="today-title">
@@ -52,9 +62,7 @@
             <p id="today-title" class="eyebrow">Bugün</p>
             <p class="percentage" id="percentage">%0</p>
           </div>
-          <p class="total-number" aria-live="polite">
-            <span id="total-number">0</span><small>ml</small>
-          </p>
+          <p class="total-number" aria-live="polite"><span id="total-number">0</span><small>ml</small></p>
           <p class="status-line" id="status-line">Hedefe 2.500 ml kaldı</p>
           <div class="scale-labels" aria-hidden="true">
             <span>0</span>
@@ -67,9 +75,7 @@
         </section>
 
         <section class="add-section" aria-labelledby="glass-title">
-          <div class="section-heading">
-            <h2 id="glass-title">Bardak</h2>
-          </div>
+          <div class="section-heading"><h2 id="glass-title">Bardak</h2></div>
           <div class="glass-grid">
             <button class="glass-button" type="button" data-glass="small">
               <span class="glass-symbol glass-symbol-small" aria-hidden="true"></span>
@@ -90,9 +96,7 @@
         </section>
 
         <section class="add-section amount-section" aria-labelledby="amount-title">
-          <div class="section-heading">
-            <h2 id="amount-title">Miktar</h2>
-          </div>
+          <div class="section-heading"><h2 id="amount-title">Miktar</h2></div>
           <div class="amount-grid">
             <button class="amount-button" type="button" data-amount="100"><strong>100</strong><span>ml</span></button>
             <button class="amount-button" type="button" data-amount="250"><strong>250</strong><span>ml</span></button>
@@ -110,9 +114,7 @@
         </section>
 
         <section class="week-section" aria-labelledby="week-title">
-          <div class="section-heading">
-            <h2 id="week-title">Son 7 gün</h2>
-          </div>
+          <div class="section-heading"><h2 id="week-title">Son 7 gün</h2></div>
           <div class="week-chart" id="week-chart" role="img" aria-label="Son yedi günün su tüketimi"></div>
         </section>
       </section>
@@ -121,9 +123,7 @@
     <dialog class="app-dialog" id="custom-dialog">
       <form method="dialog" id="custom-form">
         <div class="dialog-heading">
-          <div>
-            <h2>Özel miktar</h2>
-          </div>
+          <h2>Özel miktar</h2>
           <button class="dialog-close" value="cancel" type="submit" aria-label="Pencereyi kapat">×</button>
         </div>
         <label class="number-field">
@@ -133,52 +133,24 @@
             <span>ml</span>
           </span>
         </label>
-        <div class="dialog-actions">
-          <button class="primary-action" type="submit" value="default">Kaydet ve ekle</button>
-        </div>
+        <div class="dialog-actions"><button class="primary-action" type="submit" value="default">Kaydet ve ekle</button></div>
       </form>
     </dialog>
 
     <dialog class="app-dialog" id="settings-dialog">
       <form method="dialog" id="settings-form">
         <div class="dialog-heading">
-          <div>
-            <h2>Ayarlar</h2>
-          </div>
+          <h2>Ayarlar</h2>
           <button class="dialog-close" value="cancel" type="submit" aria-label="Pencereyi kapat">×</button>
         </div>
         <div class="theme-controls">
           <fieldset class="theme-fieldset">
             <legend>Renk</legend>
             <div class="palette-grid">
-              <label class="theme-choice">
-                <input type="radio" name="palette" value="ocean" />
-                <span class="palette-option">
-                  <span class="theme-swatches ocean-swatches" aria-hidden="true"><i></i><i></i></span>
-                  <span>Deniz</span>
-                </span>
-              </label>
-              <label class="theme-choice">
-                <input type="radio" name="palette" value="olive" />
-                <span class="palette-option">
-                  <span class="theme-swatches olive-swatches" aria-hidden="true"><i></i><i></i></span>
-                  <span>Zeytin</span>
-                </span>
-              </label>
-              <label class="theme-choice">
-                <input type="radio" name="palette" value="sand" />
-                <span class="palette-option">
-                  <span class="theme-swatches sand-swatches" aria-hidden="true"><i></i><i></i></span>
-                  <span>Bej</span>
-                </span>
-              </label>
-              <label class="theme-choice">
-                <input type="radio" name="palette" value="white" />
-                <span class="palette-option">
-                  <span class="theme-swatches white-swatches" aria-hidden="true"><i></i><i></i></span>
-                  <span>Beyaz</span>
-                </span>
-              </label>
+              <label class="theme-choice"><input type="radio" name="palette" value="ocean" /><span class="palette-option"><span class="theme-swatches ocean-swatches" aria-hidden="true"><i></i><i></i></span><span>Deniz</span></span></label>
+              <label class="theme-choice"><input type="radio" name="palette" value="olive" /><span class="palette-option"><span class="theme-swatches olive-swatches" aria-hidden="true"><i></i><i></i></span><span>Zeytin</span></span></label>
+              <label class="theme-choice"><input type="radio" name="palette" value="sand" /><span class="palette-option"><span class="theme-swatches sand-swatches" aria-hidden="true"><i></i><i></i></span><span>Bej</span></span></label>
+              <label class="theme-choice"><input type="radio" name="palette" value="white" /><span class="palette-option"><span class="theme-swatches white-swatches" aria-hidden="true"><i></i><i></i></span><span>Beyaz</span></span></label>
             </div>
           </fieldset>
           <fieldset class="theme-fieldset mode-fieldset">
@@ -196,10 +168,23 @@
           <label class="compact-field"><span>Orta bardak</span><span class="compact-input"><input id="medium-input" inputmode="numeric" /><span>ml</span></span></label>
           <label class="compact-field"><span>Büyük bardak</span><span class="compact-input"><input id="large-input" inputmode="numeric" /><span>ml</span></span></label>
         </div>
-        <div class="dialog-actions">
-          <button class="primary-action" type="submit" value="default">Kaydet</button>
-        </div>
+        <div class="dialog-actions"><button class="primary-action" type="submit" value="default">Kaydet</button></div>
       </form>
+    </dialog>
+
+    <dialog class="side-sheet" id="together-dialog" aria-labelledby="together-title">
+      <div class="sheet-shell">
+        <header class="sheet-header">
+          <div>
+            <p class="brand">SU</p>
+            <h2 id="together-title">Birlikte</h2>
+          </div>
+          <button class="dialog-close" id="together-close" type="button" aria-label="Birlikte bölümünü kapat">×</button>
+        </header>
+        <div class="sheet-content" id="together-content">
+          <p class="loading-line">Yükleniyor…</p>
+        </div>
+      </div>
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite" hidden>
@@ -207,6 +192,7 @@
       <button id="toast-action" type="button">Geri al</button>
     </div>
 
+    <script src="/config.js"></script>
     <script src="/app.js" defer></script>
   </body>
 </html>

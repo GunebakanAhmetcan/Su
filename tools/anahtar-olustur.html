@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Su — Anahtar oluştur</title>
+    <style>
+      :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      body { width: min(92%, 720px); margin: 48px auto; }
+      h1 { font-size: 1.5rem; }
+      p { color: #6f797d; line-height: 1.55; }
+      button { min-height: 44px; padding: 0 16px; border: 0; border-radius: 8px; background: #347f92; color: white; font-weight: 700; cursor: pointer; }
+      .results { display: grid; gap: 16px; margin-top: 24px; }
+      label { display: grid; gap: 7px; font-size: .82rem; font-weight: 700; }
+      .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+      input { min-width: 0; padding: 11px; border: 1px solid #9aa3a6; border-radius: 7px; font: .75rem ui-monospace, monospace; }
+      .copy { background: transparent; color: currentColor; border: 1px solid #9aa3a6; }
+      .warning { margin-top: 22px; font-size: .82rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Bildirim anahtarları</h1>
+    <p>Bu sayfa anahtarları yalnızca cihazında üretir; hiçbir yere göndermez. Aşağıdaki düğmeye bir kez bas.</p>
+    <button id="generate" type="button">Anahtarları oluştur</button>
+    <div class="results" id="results" hidden>
+      <label>
+        PUBLIC_VAPID_KEY
+        <span class="row"><input id="public-key" readonly /><button class="copy" data-copy="public-key" type="button">Kopyala</button></span>
+      </label>
+      <label>
+        VAPID_PRIVATE_KEY
+        <span class="row"><input id="private-key" readonly /><button class="copy" data-copy="private-key" type="button">Kopyala</button></span>
+      </label>
+      <label>
+        WEBHOOK_SECRET
+        <span class="row"><input id="webhook-secret" readonly /><button class="copy" data-copy="webhook-secret" type="button">Kopyala</button></span>
+      </label>
+    </div>
+    <p class="warning"><strong>Önemli:</strong> Özel anahtarı ve webhook secret değerini GitHub’a yükleme. Yalnızca Netlify Environment variables bölümüne ekle.</p>
+    <script>
+      function base64Url(bytes) {
+        let binary = "";
+        bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+        return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+      }
+
+      document.getElementById("generate").addEventListener("click", async () => {
+        const pair = await crypto.subtle.generateKey(
+          { name: "ECDSA", namedCurve: "P-256" },
+          true,
+          ["sign", "verify"]
+        );
+        const publicRaw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+        const privateJwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
+        const randomSecret = new Uint8Array(32);
+        crypto.getRandomValues(randomSecret);
+        document.getElementById("public-key").value = base64Url(publicRaw);
+        document.getElementById("private-key").value = privateJwk.d;
+        document.getElementById("webhook-secret").value = base64Url(randomSecret);
+        document.getElementById("results").hidden = false;
+      });
+
+      document.addEventListener("click", async (event) => {
+        const id = event.target.dataset.copy;
+        if (!id) return;
+        const input = document.getElementById(id);
+        input.select();
+        try {
+          await navigator.clipboard.writeText(input.value);
+          event.target.textContent = "Kopyalandı";
+          setTimeout(() => { event.target.textContent = "Kopyala"; }, 1200);
+        } catch (_error) {
+          document.execCommand("copy");
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -1,11 +1,13 @@
 {
   "name": "Su",
   "short_name": "Su",
-  "description": "Günlük su tüketimini tek dokunuşla takip et.",
+  "description": "Su tüketimini tek dokunuşla takip et ve bir kişiyle paylaş.",
   "lang": "tr",
+  "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone"],
   "background_color": "#f2f1eb",
   "theme_color": "#f2f1eb",
   "icons": [
