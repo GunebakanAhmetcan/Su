@@ -1,4 +1,6 @@
-# İki kişilik Su uygulaması — kurulum
+# İki kişilik Su uygulaması — sıfırdan kurulum
+
+Uygulaman zaten çalışıyorsa bu dosyayı değil **GUNCELLEME.md** dosyasını uygula.
 
 Bu kurulumda hosting Netlify'da, ortak veriler Supabase'de tutulur. Alan adı veya ücretli Hostinger paketi gerekmez.
 
@@ -24,6 +26,7 @@ Uygulamada kullanıcı adı/parola ekranı görünmez. Her telefon Supabase'de a
 3. Supabase'de **SQL Editor → New query** aç.
 4. Kodu yapıştır ve **Run** düğmesine bas.
 5. Sonuçta hata görünmemeli.
+6. Ardından **supabase/upgrade-v5.sql** dosyasının tamamını yeni sorguya yapıştırıp çalıştır.
 
 ## 4. Supabase anahtarlarını al
 
@@ -31,7 +34,7 @@ Supabase'de **Project Settings → API Keys** (bazı görünümlerde **Data API*
 
 Şunları ayrı bir yere kopyala:
 
-- **Project URL**
+- **Project URL**: `https://PROJE.supabase.co`; sonunda `/rest/v1/` olmayacak.
 - **Publishable key** (sb_publishable_...; eski projelerde anon key)
 - **Secret key** (sb_secret_...; eski projelerde service_role)
 
@@ -88,6 +91,7 @@ Netlify yayını tamamlandıktan sonra Supabase'e dön:
 9. Header ekle:
    - Ad: **x-webhook-secret**
    - Değer: Netlify'a yazdığın **WEBHOOK_SECRET**
+   - İkinci header: **Content-Type** = **application/json**
 10. Kaydet.
 
 Özel alan adı kullanıyorsan webhook URL'sinde Netlify adresi yerine özel alan adını da kullanabilirsin.
@@ -99,7 +103,7 @@ Birinci telefonda:
 1. Uygulamayı Safari/Chrome'da aç.
 2. iPhone ise **Paylaş → Ana Ekrana Ekle** ile kur ve ana ekrandaki simgeden aç.
 3. Sağ üstteki iki kişi simgesine dokun.
-4. İsmini yazıp **Yeni eşleşme oluştur** de.
+4. İsmini yazıp **Davet kodu oluştur** de.
 5. Davet kodunu ikinci kişiye gönder.
 6. **Bu cihazda bildirimleri aç** düğmesine bas ve izni ver.
 
@@ -107,14 +111,14 @@ Birinci telefonda:
 
 1. Aynı uygulama adresini aç ve ana ekrana kur.
 2. İki kişi simgesini aç.
-3. İsmini ve davet kodunu yazıp **Koda katıl** de.
+3. İsmini ve davet kodunu yazıp **Davet koduna katıl** de.
 4. Bildirimleri aç ve izni ver.
 
-Ana ekranda herkes yalnızca kendi su kaydını görür. İki kişinin yedi günlük tablosu ve hatırlatma düğmesi yalnızca **Birlikte** panelindedir.
+Ana ekranda herkes yalnızca kendi su kaydını görür. İki kişinin gün tablosu ve hatırlatma düğmesi yalnızca **Birlikte** panelindedir. Tarih seçerek eski haftalara geçebilirsin.
 
 ## Dikkat
 
-- Kullanıcı adı/parola olmadığı için cihaz kimliği tarayıcı verisinde tutulur. Safari/site verisini silme ve uygulamayı eşleşme tamamlandıktan sonra kaldırıp yeniden kurma.
+- İki kişi de kendi telefonunda **Ayarlar → Kurtarma kodum → Kod oluştur** yoluyla kişisel kurtarma kodunu saklamalı. Bu kodla başka bir cihaza aktarım yapılır; önceki cihazın eşleşme erişimi kapanır. Henüz eşitlenmemiş çevrimdışı kayıtlar başka cihaza aktarılamaz.
 - Kişisel su ekleme çevrimdışıyken devam eder; ortak tablo, senkronizasyon ve bildirim için internet gerekir.
 - iPhone'da web bildirimi için uygulamanın ana ekrana eklenmiş olması gerekir.
 - GitHub'a .env dosyası, Secret key, VAPID private key veya webhook secret yükleme.

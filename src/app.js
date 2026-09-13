@@ -1,971 +1,625 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from '@supabase/supabase-js';
+import { WaterStore, SyncEngine, dayKey, shiftDay, amountValue } from './store.js';
 
-(function () {
-  "use strict";
+const $ = id => document.getElementById(id);
+const escape = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+const number = value => Number(value || 0).toLocaleString('tr-TR');
+const dateLabel = day => new Intl.DateTimeFormat('tr-TR', { day: 'numeric', month: 'short', weekday: 'short' }).format(new Date(day + 'T12:00:00'));
+const clockLabel = time => new Intl.DateTimeFormat('tr-TR', { hour: '2-digit', minute: '2-digit' }).format(new Date(time));
+const config = window.SU_CONFIG || {};
+const background = { ocean: ['#f2f1eb','#0d1112'], olive: ['#f3f1e7','#11140f'], sand: ['#f4eee4','#17130f'], white: ['#ffffff','#101314'] };
+const changedHtml = (element, html) => { if (element && element.dataset.html !== html) { element.innerHTML = html; element.dataset.html = html; } };
 
-  const SETTINGS_KEY = "su:settings:v1";
-  const ENTRIES_KEY = "su:entries:v1";
-  const PAIR_KEY = "su:pair:v1";
-  const DELETE_QUEUE_KEY = "su:delete-queue:v1";
-  const config = window.SU_CONFIG || {};
+function deadline(promise, ms = 12000) {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Bağlantı zaman aşımına uğradı. Tekrar denenecek.')), ms); })]).finally(() => clearTimeout(timer));
+}
 
-  const defaultSettings = {
-    goal: 2500,
-    glasses: { small: 200, medium: 300, large: 400 },
-    customAmount: null,
-    palette: "ocean",
-    mode: "system"
-  };
-  const allowedPalettes = ["ocean", "olive", "sand", "white"];
-  const allowedModes = ["system", "light", "dark"];
-  const themeBackgrounds = {
-    ocean: { light: "#f2f1eb", dark: "#0d1112" },
-    olive: { light: "#f3f1e7", dark: "#11140f" },
-    sand: { light: "#f4eee4", dark: "#17130f" },
-    white: { light: "#ffffff", dark: "#101314" }
-  };
+async function boundedFetch(url, options = {}) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const original = options.signal;
+  if (original?.aborted) controller.abort();
+  else original?.addEventListener('abort', abort, { once: true });
+  const timer = setTimeout(abort, 10000);
+  try { return await fetch(url, { ...options, signal: controller.signal }); }
+  finally { clearTimeout(timer); original?.removeEventListener('abort', abort); }
+}
 
-  let today = dayKey(new Date());
-  let settings = loadSettings();
-  let entryStore = loadEntries();
-  let pairState = loadJson(PAIR_KEY, null);
-  let deleteQueue = loadJson(DELETE_QUEUE_KEY, []);
-  let supabase = null;
-  let authUser = null;
-  let sharedMembers = [];
-  let sharedEntries = [];
-  let syncInFlight = false;
-  let toastTimer = null;
-  let togetherRefreshTimer = null;
+function errorText(error) {
+  const text = String(error?.message || error || '');
+  if (/sync_water_changes|su_version|recorded_day|claim_push_job|schema cache|does not exist/i.test(text)) return 'Ortak kullanım güncellemesi henüz tamamlanmamış.';
+  if (/fetch|network|abort|timeout|time.?out/i.test(text)) return 'Bağlantı kurulamadı. Cihazdaki kayıtların korunuyor.';
+  if (/session_lost/i.test(text)) return 'Bu cihazın eşleşme oturumu değişmiş. Kurtarma kodunla geri dönebilirsin.';
+  if (/anonymous|signups/i.test(text)) return 'Ortak kullanıma giriş şu anda kullanılamıyor.';
+  return text || 'İşlem tamamlanamadı. Tekrar dene.';
+}
 
-  function byId(id) {
-    return document.getElementById(id);
+function main() {
+  let store;
+  try { store = new WaterStore(localStorage); }
+  catch (error) { $('startup-status').hidden = false; $('startup-status').textContent = errorText(error); return; }
+  let client, authTask, user, apiReady = false, sessionLost = false;
+  let syncTimer, syncBackoff = 1500, syncMessage = '', syncing = false;
+  let refreshTask, refreshMessage = '', historyDay = store.today(), historyEnd = store.today();
+  let toastTimer, toastUndo, pairBusy = false, reminderBusy = false, deviceBusy = false;
+  let deviceState = 'checking', deviceNote = '', lastDay = store.today(), recoveryCode = '';
+  let nextReminderAt = 0, lastJob = null, jobTimer, refreshTimer, deviceTask;
+  const pair = () => store.state.pair;
+  const settings = () => store.state.settings;
+
+  function showToast(message, undo) {
+    const toast = $('toast');
+    clearTimeout(toastTimer);
+    toastUndo = undo;
+    const modal = Array.from(document.querySelectorAll('dialog[open]')).at(-1);
+    (modal || document.body).append(toast);
+    $('toast-message').textContent = message;
+    $('toast-action').hidden = !undo;
+    toast.hidden = false;
+    toastTimer = setTimeout(() => { toast.hidden = true; toastUndo = null; }, 6500);
   }
-
-  function loadJson(key, fallback) {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(key) || "null");
-      return parsed === null ? fallback : parsed;
-    } catch (_error) {
-      return fallback;
-    }
+  async function action(task) {
+    try { await task(); } catch (error) { showToast(errorText(error)); }
   }
-
-  function saveJson(key, value) {
-    localStorage.setItem(key, JSON.stringify(value));
+  function openDialog(dialog) {
+    dialog.classList.remove('is-closing');
+    if (!dialog.open) dialog.showModal();
+    document.documentElement.classList.add('modal-open');
   }
-
-  function dayKey(date) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return year + "-" + month + "-" + day;
+  function closeDialog(dialog) {
+    if (!dialog?.open || dialog.classList.contains('is-closing')) return;
+    dialog.classList.add('is-closing');
+    const delay = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 140;
+    setTimeout(() => { dialog.close(); dialog.classList.remove('is-closing'); }, delay);
   }
-
-  function safeNumber(value, fallback, min, max) {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) return fallback;
-    return Math.min(max, Math.max(min, Math.round(parsed)));
-  }
-
-  function escapeHtml(value) {
-    return String(value ?? "")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
-  }
-
-  function loadSettings() {
-    const parsed = loadJson(SETTINGS_KEY, null);
-    if (!parsed) return structuredClone(defaultSettings);
-    return {
-      goal: safeNumber(parsed.goal, defaultSettings.goal, 500, 6000),
-      glasses: {
-        small: safeNumber(parsed.glasses && parsed.glasses.small, defaultSettings.glasses.small, 50, 1500),
-        medium: safeNumber(parsed.glasses && parsed.glasses.medium, defaultSettings.glasses.medium, 50, 1500),
-        large: safeNumber(parsed.glasses && parsed.glasses.large, defaultSettings.glasses.large, 50, 1500)
-      },
-      customAmount: parsed.customAmount ? safeNumber(parsed.customAmount, null, 50, 3000) : null,
-      palette: allowedPalettes.includes(parsed.palette) ? parsed.palette : defaultSettings.palette,
-      mode: allowedModes.includes(parsed.mode) ? parsed.mode : defaultSettings.mode
-    };
-  }
-
-  function loadEntries() {
-    const parsed = loadJson(ENTRIES_KEY, {});
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-
-    Object.keys(parsed).forEach(function (key) {
-      if (!Array.isArray(parsed[key])) {
-        parsed[key] = [];
-        return;
-      }
-      parsed[key] = parsed[key]
-        .filter(function (entry) {
-          return entry && Number(entry.amount) > 0 && Number(entry.createdAt) > 0;
-        })
-        .map(function (entry) {
-          const localId = String(entry.clientId || entry.id || makeId());
-          return {
-            id: localId,
-            clientId: localId,
-            remoteId: entry.remoteId || null,
-            amount: safeNumber(entry.amount, 250, 1, 10000),
-            createdAt: Number(entry.createdAt),
-            synced: Boolean(entry.synced)
-          };
-        });
-    });
-    return parsed;
-  }
-
-  function saveSettings() {
-    saveJson(SETTINGS_KEY, settings);
-  }
-
-  function saveEntries() {
-    saveJson(ENTRIES_KEY, entryStore);
-  }
-
-  function savePair() {
-    saveJson(PAIR_KEY, pairState);
-    renderConnectionDot();
-  }
-
-  function saveDeleteQueue() {
-    saveJson(DELETE_QUEUE_KEY, deleteQueue);
-  }
-
-  function applyTheme() {
-    document.documentElement.dataset.palette = settings.palette;
-    document.documentElement.dataset.mode = settings.mode;
-    const systemIsDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const dark = settings.mode === "dark" || (settings.mode === "system" && systemIsDark);
-    document.documentElement.dataset.resolved = dark ? "dark" : "light";
-    byId("theme-color").setAttribute("content", themeBackgrounds[settings.palette][dark ? "dark" : "light"]);
-  }
-
-  function entriesForToday() {
-    return entryStore[today] || [];
-  }
-
-  function totalFor(entries) {
-    return (entries || []).reduce(function (sum, entry) {
-      return sum + Number(entry.amount || 0);
-    }, 0);
-  }
-
-  function makeId() {
-    if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
-    return Date.now() + "-" + Math.random().toString(16).slice(2);
-  }
-
-  function addAmount(amount) {
-    const id = makeId();
-    const entry = {
-      id: id,
-      clientId: id,
-      remoteId: null,
-      amount: amount,
-      createdAt: Date.now(),
-      synced: false
-    };
-    entryStore[today] = [entry].concat(entriesForToday());
-    saveEntries();
-    render();
-    showToast(amount + " ml eklendi", function () {
-      removeEntry(entry.id);
-    });
-    if (pairState && navigator.onLine) syncAll().catch(function () {});
-  }
-
-  function findEntry(id) {
-    for (const key of Object.keys(entryStore)) {
-      const entry = (entryStore[key] || []).find(function (item) {
-        return item.id === id;
+  function getClient() {
+    if (!config.supabaseUrl || !config.supabaseAnonKey) throw new Error('Ortak kullanım henüz ayarlanmamış.');
+    if (!client) {
+      const url = config.supabaseUrl.trim().replace(/\/rest\/v1\/?$/, '').replace(/\/+$/, '');
+      client = createClient(url, config.supabaseAnonKey, {
+        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+        global: { fetch: boundedFetch }
       });
-      if (entry) return entry;
+      client.auth.onAuthStateChange((_event, session) => { user = session?.user || null; });
     }
+    return client;
+  }
+  async function backend({ recover = false, create = true } = {}) {
+    if (!navigator.onLine) throw new Error('Çevrimdışısın. Cihazdaki kayıtların korunuyor.');
+    const api = getClient();
+    if (!authTask) {
+      authTask = (async () => {
+        const result = await api.auth.getSession();
+        if (result.error) throw result.error;
+        const session = result.data.session;
+        user = session?.user || null;
+        return user;
+      })().finally(() => { authTask = null; });
+    }
+    let current = await deadline(authTask);
+    if (!current && create) {
+      if (!authTask) authTask = api.auth.signInAnonymously().then(signed => {
+        if (signed.error) throw signed.error;
+        user = signed.data.user; return user;
+      }).finally(() => { authTask = null; });
+      current = await deadline(authTask);
+    }
+    if (!current) return null;
+    if (pair() && pair().userId !== current.id && !recover) {
+      sessionLost = true;
+      throw new Error('session_lost');
+    }
+    sessionLost = false;
+    if (!apiReady) {
+      const version = await api.rpc('su_version');
+      if (version.error) throw version.error;
+      apiReady = version.data === 5;
+      if (!apiReady) throw new Error('su_version');
+    }
+    return api;
+  }
+
+  const engine = new SyncEngine(store, {
+    async write(batch, currentPair) {
+      const api = await backend();
+      const result = await api.rpc('sync_water_changes', {
+        p_room_id: currentPair.roomId,
+        p_changes: batch.map(operation => ({
+          kind: operation.kind, revision: operation.revision,
+          client_id: operation.clientId || operation.entry.clientId,
+          ...(operation.entry ? { amount: operation.entry.amount, recorded_at: new Date(operation.entry.createdAt).toISOString(), recorded_day: operation.entry.day } : {})
+        }))
+      });
+      if (result.error) throw result.error;
+      return result.data;
+    },
+    async profile(values, currentPair) {
+      const api = await backend();
+      const result = await api.from('profiles').update({ display_name: currentPair.displayName, daily_goal: values.goal, updated_at: new Date().toISOString() }).eq('user_id', currentPair.userId);
+      if (result.error) throw result.error;
+    }
+  });
+
+  async function sync() {
+    clearTimeout(syncTimer);
+    if (!pair() || !navigator.onLine || document.hidden) { renderSync(); return; }
+    syncing = true; renderSync();
+    try {
+      await engine.run();
+      syncMessage = ''; syncBackoff = 1500;
+    } catch (error) {
+      syncMessage = errorText(error);
+      if (!sessionLost) {
+        syncTimer = setTimeout(sync, syncBackoff);
+        syncBackoff = Math.min(60000, syncBackoff * 2);
+      }
+    } finally { syncing = false; renderSync(); }
+  }
+  function requestSync() { clearTimeout(syncTimer); syncTimer = setTimeout(sync, 120); }
+  function renderSync() {
+    const pending = Object.keys(store.state.outbox).length;
+    const element = $('sync-status');
+    element.hidden = !pair() || (!pending && !syncMessage && !syncing && navigator.onLine);
+    element.textContent = syncMessage || (!navigator.onLine ? 'Çevrimdışı · Kayıtlar bu cihazda' : syncing ? 'Eşitleniyor…' : pending + ' işlem eşitlenmeyi bekliyor');
+    $('connection-dot').hidden = !pair();
+    $('connection-dot').dataset.state = navigator.onLine && !syncMessage && !pending ? 'ready' : 'pending';
+  }
+  function applyTheme() {
+    const theme = settings();
+    const dark = theme.mode === 'dark' || (theme.mode === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+    Object.assign(document.documentElement.dataset, { palette: theme.palette, mode: theme.mode, resolved: dark ? 'dark' : 'light' });
+    $('theme-color').content = background[theme.palette][dark ? 1 : 0];
+  }
+  function add(amount) {
+    const id = store.add(amount);
+    showToast(number(amount) + ' ml eklendi', () => { store.remove(id); requestSync(); });
+    requestSync();
+  }
+  function remove(id) {
+    const entry = store.remove(id);
+    if (entry) showToast(number(entry.amount) + ' ml silindi', () => { store.restore(entry); requestSync(); });
+    requestSync();
+  }
+  function renderList(container, entries) {
+    if (!container.querySelector('.entry-list')) container.innerHTML = '<ul class="entry-list"></ul><p class="empty-log">Bu gün için kayıt yok.</p>';
+    const list = container.querySelector('ul');
+    container.querySelector('p').hidden = entries.length > 0;
+    const existing = new Map(Array.from(list.children).map(element => [element.dataset.id, element]));
+    const ids = new Set(entries.map(entry => entry.clientId));
+    for (const [id, node] of existing) if (!ids.has(id)) node.remove();
+    entries.forEach((entry, index) => {
+      let node = existing.get(entry.clientId);
+      if (!node) {
+        node = document.createElement('li'); node.dataset.id = entry.clientId;
+        node.innerHTML = '<time></time><span class="entry-rule" aria-hidden="true"></span><strong></strong><button class="delete-entry" type="button" aria-label="Kaydı sil"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/></svg></button>';
+      }
+      node.querySelector('time').textContent = clockLabel(entry.createdAt);
+      node.querySelector('time').dateTime = new Date(entry.createdAt).toISOString();
+      node.querySelector('strong').textContent = number(entry.amount) + ' ml';
+      node.querySelector('button').dataset.delete = entry.clientId;
+      node.querySelector('button').ariaLabel = clockLabel(entry.createdAt) + ', ' + number(entry.amount) + ' ml kaydını sil';
+      if (list.children[index] !== node) list.insertBefore(node, list.children[index] || null);
+    });
+  }
+  function renderWeek() {
+    const today = store.today();
+    const dates = Array.from({ length: 7 }, (_, i) => shiftDay(today, i - 6));
+    if ($('week-chart').dataset.end !== today) {
+      $('week-chart').dataset.end = today;
+      $('week-chart').innerHTML = dates.map(day => '<button class="day-column" type="button" data-history-day="' + day + '"><span class="day-total"></span><span class="bar-track"><span class="bar-fill"></span></span><span class="day-label"></span></button>').join('');
+    }
+    Array.from($('week-chart').children).forEach((node, index) => {
+      const day = dates[index], total = store.total(day);
+      node.classList.toggle('is-today', day === today);
+      node.querySelector('.day-total').textContent = total ? (total / 1000).toLocaleString('tr-TR', { maximumFractionDigits: 2 }) + ' L' : '0';
+      node.querySelector('.bar-fill').style.height = Math.min(100, total / settings().goal * 100) + '%';
+      node.querySelector('.day-label').textContent = new Intl.DateTimeFormat('tr-TR', { weekday: 'short' }).format(new Date(day + 'T12:00:00'));
+      node.ariaLabel = dateLabel(day) + ', ' + number(total) + ' ml, kayıtları aç';
+    });
+  }
+  function render() {
+    const total = store.total(), goal = settings().goal, remaining = Math.max(0, goal - total);
+    const percent = Math.min(100, Math.round(total / goal * 100));
+    $('date-line').textContent = new Intl.DateTimeFormat('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
+    $('total-number').textContent = number(total);
+    $('percentage').textContent = '%' + percent;
+    $('status-line').textContent = remaining ? 'Hedefe ' + number(remaining) + ' ml kaldı' : 'Günlük hedef tamamlandı';
+    $('half-goal').textContent = number(Math.round(goal / 2)); $('full-goal').textContent = number(goal) + ' ml';
+    $('progress-fill').style.width = percent + '%'; $('water-progress').setAttribute('aria-valuenow', String(percent));
+    for (const [key, amount] of Object.entries(settings().glasses)) $(key + '-amount').textContent = number(amount) + ' ml';
+    const custom = settings().customAmount;
+    changedHtml($('custom-slot'), custom
+      ? '<button class="amount-button" type="button" data-custom-add><strong>' + number(custom) + '</strong><span>ml</span></button>'
+      : '<button class="amount-button custom-empty" type="button" data-custom-new><strong>Özel</strong><span>ml gir</span></button>');
+    $('custom-edit-link').hidden = !custom;
+    const entries = store.entriesFor();
+    $('record-count').textContent = entries.length ? entries.length + ' kayıt' : 'Bugün';
+    renderList($('entry-content'), entries.slice(0, 5));
+    $('all-records').textContent = entries.length > 5 ? 'Tüm kayıtlar (' + entries.length + ')' : 'Geçmişi aç';
+    renderWeek(); renderSync();
+    if ($('history-dialog').open) renderHistory();
+    if ($('together-dialog').open) renderTogether();
+  }
+  function renderHistory() {
+    $('history-date').value = historyDay; $('history-date').max = store.today();
+    $('history-total').textContent = number(store.total(historyDay)) + ' ml';
+    $('history-next').disabled = historyDay >= store.today();
+    renderList($('history-entries'), store.entriesFor(historyDay));
+  }
+  function openHistory(day = store.today()) {
+    historyDay = day; renderHistory(); openDialog($('history-dialog'));
+    if (pair() && navigator.onLine) action(() => loadRange(day, day));
+  }
+  async function loadRange(from, to) {
+    const api = await backend();
+    await engine.run();
+    const snapshotRevision = store.state.clock;
+    const membership = await api.from('room_members').select('user_id,joined_at').eq('room_id', pair().roomId).order('joined_at');
+    if (membership.error) throw membership.error;
+    if (!membership.data.some(member => member.user_id === pair().userId)) throw new Error('Eşleşmeye erişilemiyor. Kurtarma kodunla geri dönebilirsin.');
+    const profiles = await api.from('profiles').select('user_id,display_name,daily_goal,notifications_enabled').in('user_id', membership.data.map(m => m.user_id));
+    if (profiles.error) throw profiles.error;
+    const records = [];
+    for (let offset = 0; ; offset += 500) {
+      const result = await api.rpc('get_pair_entries', { p_from: from, p_to: to, p_time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }).range(offset, offset + 499);
+      if (result.error) throw result.error;
+      records.push(...result.data);
+      if (result.data.length < 500) break;
+    }
+    store.merge(profiles.data, records, from, to, snapshotRevision);
+  }
+  async function refreshTogether() {
+    if (refreshTask || !pair() || !navigator.onLine || document.hidden) { renderTogether(); return; }
+    const end = historyEnd;
+    refreshMessage = ''; renderTogether();
+    refreshTask = (async () => { await loadRange(shiftDay(end, -6), end); if (end !== store.today()) await loadRange(store.today(), store.today()); })();
+    try { await refreshTask; }
+    catch (error) { refreshMessage = errorText(error); }
+    finally {
+      refreshTask = null; renderTogether();
+      if (end !== historyEnd && $('together-dialog').open) refreshTogether();
+    }
+  }
+  function setupHtml() {
+    return '<section class="sheet-section pair-setup"><h3>İsmini yaz ve eşleş</h3><label class="sheet-field"><span>Senin adın</span><input id="pair-name" autocomplete="name" maxlength="30"></label><button class="primary-action" type="button" data-pair-action="create">Davet kodu oluştur</button><div class="or-divider"><span>veya</span></div><label class="sheet-field"><span>Davet kodu</span><input id="pair-code" class="code-input" autocapitalize="characters" autocomplete="off" maxlength="14" placeholder="ABCD-EFGH-IJKL"></label><button class="secondary-action" type="button" data-pair-action="join">Davet koduna katıl</button></section>' + recoveryInput();
+  }
+  function recoveryInput() {
+    return '<details class="recovery-section"><summary>Eşleşmemi geri getir</summary><label class="sheet-field"><span>Kurtarma kodu</span><textarea id="restore-code" rows="3" autocomplete="off" autocapitalize="characters" spellcheck="false"></textarea></label><p class="sheet-note">Kendi kurtarma kodunu kullan. Aktarım tamamlandığında eski cihazın bağlantısı kapanır.</p><button class="secondary-action wide-action" type="button" data-pair-action="restore">Bu cihaza aktar</button></details>';
+  }
+  function renderTogether() {
+    if (!pair()) {
+      if ($('together-content').dataset.frame !== 'setup') { $('together-content').dataset.frame = 'setup'; $('together-content').innerHTML = setupHtml(); }
+      return;
+    }
+    const members = store.state.shared.members;
+    const me = members.find(m => m.user_id === pair().userId);
+    const partner = members.find(m => m.user_id !== pair().userId);
+    const key = pair().roomId + ':' + (partner?.user_id || 'waiting') + ':' + sessionLost;
+    if ($('together-content').dataset.frame !== key) {
+      $('together-content').dataset.frame = key;
+      $('together-content').innerHTML = [
+        '<section class="sheet-section"><div class="people-totals"><div><span id="my-name"></span><strong id="my-total"></strong></div><div><span id="partner-name"></span><strong id="partner-total"></strong></div></div>',
+        '<p id="shared-status" class="sheet-note" role="status"></p>',
+        '<details class="invite-details"' + (partner ? '' : ' open') + '><summary>Davet kodu</summary><div class="invite-line"><strong>' + escape(pair().inviteCode.match(/.{1,4}/g)?.join('-') || pair().inviteCode) + '</strong><button class="text-action" type="button" data-pair-action="copy">Kopyala</button></div></details></section>',
+        '<section class="sheet-section"><div data-device-controls></div><button id="remind-button" class="primary-action wide-action" type="button" data-pair-action="remind">Hatırlat</button><p id="reminder-status" class="sheet-note" role="status"></p></section>',
+        '<section class="sheet-section"><div class="section-heading"><h3>Geçmiş · ml</h3><button class="text-action" type="button" data-pair-action="refresh">Yenile</button></div>',
+        '<div class="history-nav"><button type="button" data-range="-7" aria-label="Önceki hafta">‹</button><label><span class="sr-only">Son gün</span><input id="pair-history-date" type="date"></label><button id="pair-next" type="button" data-range="7" aria-label="Sonraki hafta">›</button></div><p id="history-range" class="sheet-note"></p>',
+        '<div class="table-wrap"><table class="pair-table"><thead><tr><th scope="col">Gün</th><th scope="col" id="table-me"></th><th scope="col" id="table-partner"></th></tr></thead><tbody id="pair-rows"></tbody></table></div></section>',
+        sessionLost ? recoveryInput() : ''
+      ].join('');
+    }
+    $('my-name').textContent = me?.display_name || pair().displayName;
+    $('partner-name').textContent = partner?.display_name || 'Diğer kişi';
+    $('my-total').textContent = number(store.total()) + ' ml';
+    const total = day => store.state.shared.entries.filter(e => e.user_id === partner?.user_id && e.day === day).reduce((sum, e) => sum + e.amount, 0);
+    const loaded = day => Boolean(store.state.shared.loadedDays?.[day]);
+    $('partner-total').textContent = partner && loaded(store.today()) ? number(total(store.today())) + ' ml' : '—';
+    const updated = store.state.shared.loadedDays?.[store.today()];
+    $('shared-status').textContent = refreshMessage || (!navigator.onLine ? 'Çevrimdışı · ' : refreshTask ? 'Güncelleniyor · ' : '') + (updated ? 'Son güncelleme ' + dateLabel(dayKey(new Date(updated))) + ' ' + clockLabel(updated) : 'Eşleşme bilgileri henüz alınmadı.');
+    $('table-me').textContent = pair().displayName; $('table-partner').textContent = partner?.display_name || 'Diğer kişi';
+    $('pair-history-date').value = historyEnd; $('pair-history-date').max = store.today();
+    $('pair-next').disabled = historyEnd >= store.today();
+    $('history-range').textContent = dateLabel(shiftDay(historyEnd, -6)) + ' – ' + dateLabel(historyEnd);
+    changedHtml($('pair-rows'), Array.from({ length: 7 }, (_, i) => shiftDay(historyEnd, -i)).map(day =>
+      '<tr><th scope="row">' + (day === store.today() ? 'Bugün' : dateLabel(day)) + '</th><td>' + number(store.total(day)) + '</td><td>' + (partner && loaded(day) ? number(total(day)) : '—') + '</td></tr>').join(''));
+    renderDeviceControls();
+    const cooling = Date.now() < nextReminderAt;
+    $('remind-button').disabled = !partner || !navigator.onLine || reminderBusy || cooling || sessionLost;
+    $('remind-button').textContent = reminderBusy ? 'İstek kaydediliyor…' : cooling ? 'Birazdan tekrar hatırlatabilirsin' : (partner?.display_name || 'Diğer kişi') + ' kişisine hatırlat';
+    $('reminder-status').textContent = jobLabel(lastJob);
+  }
+  function jobLabel(job) {
+    if (!job) return '';
+    if (job.status === 'sent') return 'Bildirim gönderim servisine iletildi.';
+    if (job.status === 'failed') return job.error === 'no_active_subscription' ? 'Gönderilemedi. Diğer kişi bu cihazda bildirimleri yeniden açmalı.' : job.error === 'expired' ? 'Gönderim süresi doldu.' : 'Bildirim gönderilemedi. Biraz sonra tekrar deneyebilirsin.';
+    if (job.status === 'retry') return 'Gönderim aksadı. Otomatik tekrar denenecek.';
+    return 'Bildirim gönderilmeyi bekliyor…';
+  }
+  async function pairAction(kind) {
+    if (pairBusy) return;
+    const name = $('pair-name')?.value.trim().replace(/\s+/g, ' ');
+    const code = $('pair-code')?.value.replace(/[^a-z0-9]/gi, '').toUpperCase();
+    const restore = $('restore-code')?.value;
+    if (kind !== 'restore' && (!name || name.length > 30)) throw new Error('İsmini yaz. En fazla 30 karakter kullan.');
+    if (kind === 'join' && code?.length !== 12) throw new Error('12 karakterli davet kodunu gir.');
+    pairBusy = true;
+    document.querySelectorAll('[data-pair-action="create"],[data-pair-action="join"],[data-pair-action="restore"]').forEach(button => { button.disabled = true; });
+    try {
+      const api = await backend({ recover: kind === 'restore' });
+      const result = kind === 'restore'
+        ? await api.rpc('recover_pair', { p_code: restore })
+        : await api.rpc(kind === 'create' ? 'create_pair' : 'join_pair', { p_display_name: name, ...(kind === 'join' ? { p_invite_code: code } : {}) });
+      if (result.error) throw result.error;
+      const row = result.data?.[0];
+      if (!row) throw new Error('Eşleşme tamamlanamadı.');
+      store.pair({ roomId: row.room_id, inviteCode: row.invite_code, userId: user.id, displayName: row.display_name || name });
+      if (kind === 'restore') store.settings({ goal: row.daily_goal });
+      sessionLost = false;
+      renderTogether(); requestSync();
+      await refreshTogether(); await inspectDevice();
+    } finally {
+      pairBusy = false;
+      document.querySelectorAll('[data-pair-action="create"],[data-pair-action="join"],[data-pair-action="restore"]').forEach(button => { button.disabled = false; });
+    }
+  }
+  function isIos() { return /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
+  function standalone() { return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; }
+  function deviceCapability() {
+    if (isIos() && !standalone()) return 'install';
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return 'unsupported';
     return null;
   }
-
-  function removeEntry(id) {
-    const entry = findEntry(id);
-    entryStore[today] = entriesForToday().filter(function (item) {
-      return item.id !== id;
-    });
-    if (entry && pairState && (entry.remoteId || entry.synced)) {
-      deleteQueue.push({ clientId: entry.clientId, remoteId: entry.remoteId || null });
-      saveDeleteQueue();
-    }
-    saveEntries();
-    render();
-    if (pairState && navigator.onLine) syncAll().catch(function () {});
-  }
-
-  function showToast(message, undoAction) {
-    const toast = byId("toast");
-    const action = byId("toast-action");
-    clearTimeout(toastTimer);
-    byId("toast-message").textContent = message;
-    action.hidden = !undoAction;
-    action.onclick = function () {
-      if (undoAction) undoAction();
-      toast.hidden = true;
-      clearTimeout(toastTimer);
-    };
-    toast.hidden = false;
-    toastTimer = window.setTimeout(function () {
-      toast.hidden = true;
-    }, 4500);
-  }
-
-  function renderDate() {
-    const text = new Intl.DateTimeFormat("tr-TR", {
-      weekday: "long",
-      day: "numeric",
-      month: "long"
-    }).format(new Date());
-    byId("date-line").textContent = text.charAt(0).toUpperCase() + text.slice(1);
-  }
-
-  function renderMeter() {
-    const total = totalFor(entriesForToday());
-    const percentage = Math.min(100, Math.round((total / settings.goal) * 100));
-    const remaining = Math.max(0, settings.goal - total);
-    byId("total-number").textContent = total.toLocaleString("tr-TR");
-    byId("percentage").textContent = "%" + percentage;
-    byId("status-line").textContent =
-      total >= settings.goal
-        ? "Günlük hedef tamamlandı"
-        : "Hedefe " + remaining.toLocaleString("tr-TR") + " ml kaldı";
-    byId("half-goal").textContent = Math.round(settings.goal / 2).toLocaleString("tr-TR");
-    byId("full-goal").textContent = settings.goal.toLocaleString("tr-TR") + " ml";
-    byId("progress-fill").style.width = percentage + "%";
-    byId("water-progress").setAttribute("aria-valuenow", String(percentage));
-  }
-
-  function renderGlassAmounts() {
-    byId("small-amount").textContent = settings.glasses.small + " ml";
-    byId("medium-amount").textContent = settings.glasses.medium + " ml";
-    byId("large-amount").textContent = settings.glasses.large + " ml";
-  }
-
-  function renderCustomAmount() {
-    const slot = byId("custom-slot");
-    if (settings.customAmount) {
-      slot.innerHTML =
-        '<div class="saved-amount">' +
-          '<button class="amount-button saved-value" type="button" data-custom-add>' +
-            "<strong>" + settings.customAmount + "</strong><span>ml</span>" +
-          "</button>" +
-          '<button class="edit-amount" type="button" data-custom-edit aria-label="Kayıtlı özel miktarı değiştir">' +
-            '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.2-1 10.6-10.6a2 2 0 0 0-2.8-2.8L5.4 16.2 4 20Z"/><path d="m14.5 7.1 2.8 2.8"/></svg>' +
-          "</button>" +
-        "</div>";
-    } else {
-      slot.innerHTML =
-        '<button class="amount-button custom-empty" type="button" data-custom-edit>' +
-          "<strong>Özel</strong><span>kaydet</span>" +
-        "</button>";
-    }
-  }
-
-  function renderEntries() {
-    const entries = entriesForToday();
-    byId("record-count").textContent = entries.length ? entries.length + " ekleme" : "Bugün";
-    if (!entries.length) {
-      byId("entry-content").innerHTML = '<p class="empty-log">İlk bardağını yukarıdan ekleyebilirsin.</p>';
-      return;
-    }
-
-    const items = entries.slice(0, 5).map(function (entry) {
-      const time = new Intl.DateTimeFormat("tr-TR", { hour: "2-digit", minute: "2-digit" }).format(entry.createdAt);
-      return (
-        "<li>" +
-          "<time>" + time + "</time>" +
-          '<span class="entry-rule" aria-hidden="true"></span>' +
-          "<strong>" + entry.amount + " ml</strong>" +
-          '<button class="delete-entry" type="button" data-delete="' + escapeHtml(entry.id) + '" aria-label="' + entry.amount + ' mililitrelik kaydı sil">' +
-            '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg>' +
-          "</button>" +
-        "</li>"
-      );
-    }).join("");
-    byId("entry-content").innerHTML = '<ul class="entry-list">' + items + "</ul>";
-  }
-
-  function lastSevenDays() {
-    const days = [];
-    for (let index = 6; index >= 0; index -= 1) {
-      const date = new Date();
-      date.setHours(12, 0, 0, 0);
-      date.setDate(date.getDate() - index);
-      days.push({ date: date, key: dayKey(date) });
-    }
-    return days;
-  }
-
-  function renderWeek() {
-    const html = lastSevenDays().map(function (day) {
-      const total = totalFor(entryStore[day.key]);
-      const height = Math.max(5, Math.min(100, (total / settings.goal) * 100));
-      const label = new Intl.DateTimeFormat("tr-TR", { weekday: "narrow" }).format(day.date);
-      const totalLabel = total ? (total / 1000).toFixed(1) + "L" : "—";
-      return (
-        '<div class="day-column' + (day.key === today ? " is-today" : "") + '">' +
-          '<span class="day-total">' + totalLabel + "</span>" +
-          '<span class="bar-track"><span class="bar-fill" style="height:' + height + '%"></span></span>' +
-          '<span class="day-label">' + label + "</span>" +
-        "</div>"
-      );
-    });
-    byId("week-chart").innerHTML = html.join("");
-  }
-
-  function renderConnectionDot() {
-    byId("connection-dot").hidden = !pairState;
-  }
-
-  function render() {
-    renderDate();
-    renderMeter();
-    renderGlassAmounts();
-    renderCustomAmount();
-    renderEntries();
-    renderWeek();
-    renderConnectionDot();
-  }
-
-  function openCustomDialog() {
-    byId("custom-input").value = settings.customAmount || "";
-    byId("custom-dialog").showModal();
-    window.setTimeout(function () {
-      byId("custom-input").focus();
-    }, 50);
-  }
-
-  function openSettingsDialog() {
-    byId("goal-input").value = settings.goal;
-    byId("small-input").value = settings.glasses.small;
-    byId("medium-input").value = settings.glasses.medium;
-    byId("large-input").value = settings.glasses.large;
-    document.querySelector('input[name="palette"][value="' + settings.palette + '"]').checked = true;
-    document.querySelector('input[name="mode"][value="' + settings.mode + '"]').checked = true;
-    byId("settings-dialog").showModal();
-  }
-
-  function backendConfigured() {
-    return Boolean(config.supabaseUrl && config.supabaseAnonKey);
-  }
-
-  async function ensureBackend() {
-    if (!backendConfigured()) throw new Error("Ortak kullanım bağlantısı henüz ayarlanmadı.");
-    if (!supabase) {
-      supabase = createClient(config.supabaseUrl, config.supabaseAnonKey, {
-        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
-      });
-    }
-    if (!authUser) {
-      const sessionResult = await supabase.auth.getSession();
-      if (sessionResult.error) throw sessionResult.error;
-      let session = sessionResult.data.session;
-      if (!session) {
-        const signInResult = await supabase.auth.signInAnonymously();
-        if (signInResult.error) throw signInResult.error;
-        session = signInResult.data.session;
-      }
-      if (!session || !session.user) throw new Error("Anonim oturum başlatılamadı.");
-      authUser = session.user;
-    }
-    if (pairState && pairState.userId && pairState.userId !== authUser.id) {
-      throw new Error("Bu cihazdaki eşleşme oturumu değişmiş. Tarayıcı verilerini silmeden tekrar dene.");
-    }
-    return supabase;
-  }
-
-  function formatInvite(code) {
-    return String(code || "").replace(/[^a-z0-9]/gi, "").toUpperCase().match(/.{1,4}/g)?.join("-") || "";
-  }
-
-  function normalizeInvite(code) {
-    return String(code || "").replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 12);
-  }
-
-  function cleanName(value) {
-    return String(value || "").trim().replace(/\s+/g, " ").slice(0, 30);
-  }
-
-  function pairErrorMessage(error) {
-    const message = String((error && error.message) || error || "");
-    if (/anonymous|anonim|signups/i.test(message)) return "Supabase ayarlarında anonim girişleri açmalısın.";
-    if (/Davet kodu bulunamadı/i.test(message)) return "Davet kodu bulunamadı.";
-    if (/iki kişi/i.test(message)) return "Bu eşleşmede iki kişi zaten var.";
-    if (/fetch|network|Failed to fetch/i.test(message)) return "Bağlantı kurulamadı. İnterneti kontrol edip tekrar dene.";
-    return message || "İşlem tamamlanamadı.";
-  }
-
-  function renderTogetherSetup(message) {
-    const content = byId("together-content");
-    if (!backendConfigured()) {
-      content.innerHTML =
-        '<section class="sheet-section">' +
-          '<p class="sheet-kicker">Kurulum gerekli</p>' +
-          '<h3>Ortak kullanım henüz bağlı değil</h3>' +
-          '<p class="sheet-note">ZIP içindeki KURULUM.md adımlarını tamamladığında bu bölüm açılır.</p>' +
-        "</section>";
-      return;
-    }
-    content.innerHTML =
-      '<section class="sheet-section pair-setup">' +
-        '<p class="sheet-kicker">İki kişi</p>' +
-        '<h3>İsmini yaz ve eşleş</h3>' +
-        '<label class="sheet-field"><span>Senin adın</span><input id="pair-name" autocomplete="name" maxlength="30" placeholder="İsmin" value="' + escapeHtml(pairState?.displayName || "") + '" /></label>' +
-        '<button class="primary-action wide-action" type="button" data-pair-action="create">Yeni eşleşme oluştur</button>' +
-        '<div class="or-divider"><span>veya</span></div>' +
-        '<label class="sheet-field"><span>Davet kodu</span><input id="pair-code" class="code-input" autocapitalize="characters" autocomplete="off" maxlength="14" placeholder="ABCD-EFGH-IJKL" /></label>' +
-        '<button class="secondary-action wide-action" type="button" data-pair-action="join">Koda katıl</button>' +
-        (message ? '<p class="inline-error" role="alert">' + escapeHtml(message) + "</p>" : "") +
-      "</section>";
-  }
-
-  function totalsByUserAndDay() {
-    const totals = {};
-    sharedEntries.forEach(function (entry) {
-      const key = dayKey(new Date(entry.recorded_at));
-      totals[entry.user_id] ||= {};
-      totals[entry.user_id][key] = (totals[entry.user_id][key] || 0) + Number(entry.amount || 0);
-    });
-    return totals;
-  }
-
-  function memberById(userId) {
-    return sharedMembers.find(function (member) {
-      return member.user_id === userId;
-    });
-  }
-
-  function renderTogetherPaired(message) {
-    const content = byId("together-content");
-    const me = memberById(authUser?.id) || {
-      user_id: authUser?.id,
-      display_name: pairState.displayName || "Sen",
-      daily_goal: settings.goal,
-      notifications_enabled: false
-    };
-    const partner = sharedMembers.find(function (member) {
-      return member.user_id !== authUser?.id;
-    });
-    const totals = totalsByUserAndDay();
-    const myToday = totals[me.user_id]?.[today] || totalFor(entriesForToday());
-    const partnerToday = partner ? totals[partner.user_id]?.[today] || 0 : 0;
-    const code = formatInvite(pairState.inviteCode);
-
-    let html =
-      '<section class="sheet-section pair-heading">' +
-        '<p class="sheet-kicker">' + (partner ? escapeHtml(partner.display_name) + " ile" : "Davet kodun") + "</p>" +
-        '<div class="invite-line"><strong>' + escapeHtml(code) + '</strong><button class="text-action" type="button" data-pair-action="copy">Kopyala</button></div>' +
-        (!partner ? '<p class="sheet-note">Diğer kişi Birlikte bölümünde bu kodu girsin.</p>' : "") +
-      "</section>";
-
-    if (partner) {
-      html +=
-        '<section class="sheet-section">' +
-          '<div class="people-totals">' +
-            '<div><span>' + escapeHtml(me.display_name) + '</span><strong>' + myToday.toLocaleString("tr-TR") + ' <small>ml</small></strong></div>' +
-            '<div><span>' + escapeHtml(partner.display_name) + '</span><strong>' + partnerToday.toLocaleString("tr-TR") + ' <small>ml</small></strong></div>' +
-          "</div>" +
-          '<div class="reminder-actions">' +
-            (!me.notifications_enabled
-              ? '<button class="secondary-action wide-action" type="button" data-pair-action="notifications">Bu cihazda bildirimleri aç</button>'
-              : '<p class="notification-ready">Bu cihazda bildirimler açık</p>') +
-            '<button class="primary-action wide-action" type="button" data-pair-action="remind" data-recipient="' + escapeHtml(partner.user_id) + '"' + (partner.notifications_enabled ? "" : " disabled") + ">" +
-              (partner.notifications_enabled ? escapeHtml(partner.display_name) + " kişisine hatırlat" : escapeHtml(partner.display_name) + " bildirimleri açmadı") +
-            "</button>" +
-          "</div>" +
-        "</section>";
-    } else {
-      html +=
-        '<section class="sheet-section">' +
-          (!me.notifications_enabled
-            ? '<button class="secondary-action wide-action" type="button" data-pair-action="notifications">Bu cihazda bildirimleri aç</button>'
-            : '<p class="notification-ready">Bu cihazda bildirimler açık</p>') +
-        "</section>";
-    }
-
-    if (partner) {
-      const rows = lastSevenDays().slice().reverse().map(function (day) {
-        const dayLabel = day.key === today
-          ? "Bugün"
-          : new Intl.DateTimeFormat("tr-TR", { weekday: "short", day: "numeric", month: "short" }).format(day.date);
-        const myTotal = totals[me.user_id]?.[day.key] || 0;
-        const partnerTotal = totals[partner.user_id]?.[day.key] || 0;
-        return (
-          "<tr>" +
-            "<th scope=\"row\">" + escapeHtml(dayLabel) + "</th>" +
-            "<td>" + (myTotal ? myTotal.toLocaleString("tr-TR") : "—") + "</td>" +
-            "<td>" + (partnerTotal ? partnerTotal.toLocaleString("tr-TR") : "—") + "</td>" +
-          "</tr>"
-        );
-      }).join("");
-      html +=
-        '<section class="sheet-section history-section">' +
-          '<div class="section-heading compact-heading"><h3>Geçmiş</h3><button class="text-action" type="button" data-pair-action="refresh">Yenile</button></div>' +
-          '<div class="table-wrap"><table class="pair-table">' +
-            "<thead><tr><th>Gün</th><th>" + escapeHtml(me.display_name) + "</th><th>" + escapeHtml(partner.display_name) + "</th></tr></thead>" +
-            "<tbody>" + rows + "</tbody>" +
-          "</table></div>" +
-        "</section>";
-    }
-
-    if (message) html += '<p class="sheet-message" role="status">' + escapeHtml(message) + "</p>";
-    content.innerHTML = html;
-  }
-
-  function renderTogetherLoading() {
-    byId("together-content").innerHTML = '<p class="loading-line">Yükleniyor…</p>';
-  }
-
-  async function createPair() {
-    const name = cleanName(byId("pair-name")?.value);
-    if (!name) {
-      renderTogetherSetup("Önce ismini yaz.");
-      return;
-    }
-    try {
-      renderTogetherLoading();
-      await ensureBackend();
-      const result = await supabase.rpc("create_pair", { p_display_name: name });
-      if (result.error) throw result.error;
-      const row = Array.isArray(result.data) ? result.data[0] : result.data;
-      if (!row) throw new Error("Eşleşme oluşturulamadı.");
-      pairState = {
-        roomId: row.room_id,
-        inviteCode: row.invite_code,
-        userId: authUser.id,
-        displayName: name
-      };
-      savePair();
-      await updateMyProfile();
-      await syncAll();
-      await refreshPairData("Davet kodu hazır.");
-    } catch (error) {
-      renderTogetherSetup(pairErrorMessage(error));
-    }
-  }
-
-  async function joinPair() {
-    const name = cleanName(byId("pair-name")?.value);
-    const code = normalizeInvite(byId("pair-code")?.value);
-    if (!name || code.length !== 12) {
-      renderTogetherSetup(!name ? "Önce ismini yaz." : "12 karakterli davet kodunu gir.");
-      return;
-    }
-    try {
-      renderTogetherLoading();
-      await ensureBackend();
-      const result = await supabase.rpc("join_pair", { p_invite_code: code, p_display_name: name });
-      if (result.error) throw result.error;
-      const row = Array.isArray(result.data) ? result.data[0] : result.data;
-      if (!row) throw new Error("Eşleşmeye katılınamadı.");
-      pairState = {
-        roomId: row.room_id,
-        inviteCode: row.invite_code,
-        userId: authUser.id,
-        displayName: name
-      };
-      savePair();
-      await updateMyProfile();
-      await syncAll();
-      await refreshPairData("Eşleşme tamamlandı.");
-    } catch (error) {
-      renderTogetherSetup(pairErrorMessage(error));
-    }
-  }
-
-  async function updateMyProfile(extra) {
-    if (!pairState) return;
-    await ensureBackend();
-    const values = Object.assign({
-      display_name: pairState.displayName,
-      daily_goal: settings.goal,
-      updated_at: new Date().toISOString()
-    }, extra || {});
-    const result = await supabase.from("profiles").update(values).eq("user_id", authUser.id);
+  function keyBytes(key) { return Uint8Array.from(atob(key.replace(/-/g,'+').replace(/_/g,'/').padEnd(Math.ceil(key.length / 4) * 4, '=')), c => c.charCodeAt(0)); }
+  async function registerSubscription(api, subscription) {
+    const data = subscription.toJSON();
+    if (!data.keys?.auth || !data.keys?.p256dh) throw new Error('Bildirim aboneliği okunamadı.');
+    const result = await api.from('push_subscriptions').upsert({ user_id: pair().userId, endpoint: subscription.endpoint, auth: data.keys.auth, p256dh: data.keys.p256dh, updated_at: new Date().toISOString() }, { onConflict: 'endpoint' });
     if (result.error) throw result.error;
   }
-
-  function allLocalEntries() {
-    return Object.values(entryStore).flat();
+  function inspectDevice() {
+    if (deviceTask) return deviceTask;
+    deviceTask = (async () => {
+      const capability = deviceCapability();
+      if (capability) { deviceState = capability; return; }
+      if (Notification.permission === 'denied') { deviceState = 'denied'; return; }
+      if (Notification.permission !== 'granted' || store.state.notificationsWanted === false) { deviceState = 'off'; return; }
+      try {
+        const registration = await deadline(navigator.serviceWorker.ready, 5000);
+        const subscription = await registration.pushManager.getSubscription();
+        if (!subscription) { deviceState = 'repair'; return; }
+        const actualKey = subscription.options?.applicationServerKey;
+        if (config.vapidPublicKey && actualKey && String(new Uint8Array(actualKey)) !== String(keyBytes(config.vapidPublicKey))) { deviceState = 'repair'; return; }
+        if (!navigator.onLine || !pair()) { deviceState = 'unverified'; return; }
+        const api = await backend();
+        // Refresh an existing, already-authorized device subscription.
+        await registerSubscription(api, subscription);
+        deviceState = 'on';
+      } catch { deviceState = 'unverified'; }
+    })().finally(() => { deviceTask = null; renderDeviceControls(); });
+    return deviceTask;
   }
-
-  async function syncAll() {
-    if (!pairState || !navigator.onLine || syncInFlight) return;
-    syncInFlight = true;
+  function renderDeviceControls() {
+    const labels = { checking: 'Bildirim durumu kontrol ediliyor…', on: 'Bu cihazda bildirimler açık', off: 'Bu cihazda bildirimler kapalı', repair: 'Bildirim aboneliği yenilenmeli', unverified: 'Cihaz izni açık · Bağlantı doğrulanamadı', denied: 'Bildirim izni kapalı. Telefon ayarlarından Su bildirimlerine izin ver.', install: 'Bildirimler için Paylaş → Ana Ekrana Ekle ile uygulamayı kur.', unsupported: 'Bu tarayıcı bildirimleri desteklemiyor.' };
+    const unavailable = ['denied','install','unsupported'].includes(deviceState);
+    const enabled = deviceState === 'on';
+    const html = '<p class="notification-ready" role="status">' + escape(deviceNote || labels[deviceState]) + '</p>' +
+      (!unavailable ? '<button class="secondary-action wide-action" type="button" data-notifications="' + (enabled ? 'off' : 'on') + '"' + (deviceBusy || !navigator.onLine || !pair() ? ' disabled' : '') + '>' + (deviceBusy ? 'İşleniyor…' : enabled ? 'Bu cihazda kapat' : ['repair','unverified'].includes(deviceState) ? 'Bildirim bağlantısını yenile' : 'Bu cihazda bildirimleri aç') + '</button>' : '');
+    document.querySelectorAll('[data-device-controls]').forEach(element => changedHtml(element, html));
+  }
+  async function notifications(enable) {
+    if (deviceBusy) return;
+    if (!pair()) throw new Error('Önce Birlikte bölümünden eşleş.');
+    const capability = deviceCapability();
+    if (capability) { deviceState = capability; renderDeviceControls(); return; }
+    deviceBusy = true; deviceNote = ''; renderDeviceControls();
     try {
-      await ensureBackend();
-
-      for (const queued of deleteQueue.slice()) {
-        let query = supabase.from("water_entries").delete().eq("user_id", authUser.id);
-        query = queued.remoteId ? query.eq("id", queued.remoteId) : query.eq("client_id", queued.clientId);
-        const result = await query;
-        if (result.error) throw result.error;
-        deleteQueue = deleteQueue.filter(function (item) {
-          return item.clientId !== queued.clientId;
-        });
-        saveDeleteQueue();
-      }
-
-      const unsynced = allLocalEntries().filter(function (entry) {
-        return !entry.synced || !entry.remoteId;
-      });
-      for (let index = 0; index < unsynced.length; index += 200) {
-        const batch = unsynced.slice(index, index + 200);
-        const rows = batch.map(function (entry) {
-          return {
-            room_id: pairState.roomId,
-            user_id: authUser.id,
-            client_id: entry.clientId,
-            amount: entry.amount,
-            recorded_at: new Date(entry.createdAt).toISOString()
-          };
-        });
-        const result = await supabase
-          .from("water_entries")
-          .upsert(rows, { onConflict: "user_id,client_id" })
-          .select("id,client_id");
-        if (result.error) throw result.error;
-        const remoteByClient = new Map((result.data || []).map(function (row) {
-          return [row.client_id, row.id];
-        }));
-        batch.forEach(function (entry) {
-          entry.remoteId = remoteByClient.get(entry.clientId) || entry.remoteId;
-          entry.synced = true;
-        });
-        saveEntries();
-      }
-    } finally {
-      syncInFlight = false;
-    }
-  }
-
-  function mergeOwnRemoteEntries(entries) {
-    if (!authUser) return;
-    const localByClient = new Map(allLocalEntries().map(function (entry) {
-      return [entry.clientId, entry];
-    }));
-    (entries || []).filter(function (entry) {
-      return entry.user_id === authUser.id;
-    }).forEach(function (remote) {
-      const existing = localByClient.get(remote.client_id);
-      if (existing) {
-        existing.remoteId = remote.id;
-        existing.synced = true;
-        return;
-      }
-      const date = new Date(remote.recorded_at);
-      const key = dayKey(date);
-      const entry = {
-        id: remote.client_id,
-        clientId: remote.client_id,
-        remoteId: remote.id,
-        amount: Number(remote.amount),
-        createdAt: date.getTime(),
-        synced: true
-      };
-      entryStore[key] = [entry].concat(entryStore[key] || []);
-      localByClient.set(entry.clientId, entry);
-    });
-    saveEntries();
-    render();
-  }
-
-  async function refreshPairData(message) {
-    if (!pairState) {
-      renderTogetherSetup();
-      return;
-    }
-    try {
-      await ensureBackend();
-      if (navigator.onLine) await syncAll();
-      const membershipResult = await supabase
-        .from("room_members")
-        .select("user_id,joined_at")
-        .eq("room_id", pairState.roomId)
-        .order("joined_at", { ascending: true });
-      if (membershipResult.error) throw membershipResult.error;
-      const userIds = (membershipResult.data || []).map(function (row) { return row.user_id; });
-      if (!userIds.includes(authUser.id)) throw new Error("Bu eşleşmeye erişilemiyor.");
-
-      const profilesResult = await supabase
-        .from("profiles")
-        .select("user_id,display_name,daily_goal,notifications_enabled")
-        .in("user_id", userIds);
-      if (profilesResult.error) throw profilesResult.error;
-      sharedMembers = (membershipResult.data || []).map(function (membership) {
-        const profile = (profilesResult.data || []).find(function (item) {
-          return item.user_id === membership.user_id;
-        });
-        return Object.assign({}, membership, profile || { display_name: "Kullanıcı", daily_goal: 2500, notifications_enabled: false });
-      });
-
-      const start = lastSevenDays()[0].date;
-      start.setHours(0, 0, 0, 0);
-      const entriesResult = await supabase
-        .from("water_entries")
-        .select("id,client_id,user_id,amount,recorded_at")
-        .eq("room_id", pairState.roomId)
-        .gte("recorded_at", start.toISOString())
-        .order("recorded_at", { ascending: false });
-      if (entriesResult.error) throw entriesResult.error;
-      sharedEntries = entriesResult.data || [];
-      mergeOwnRemoteEntries(sharedEntries);
-      renderTogetherPaired(message);
-    } catch (error) {
-      if (!navigator.onLine) {
-        renderTogetherPaired("Çevrimdışısın. Son görülen bilgiler gösteriliyor.");
-      } else {
-        const text = pairErrorMessage(error);
-        byId("together-content").innerHTML =
-          '<section class="sheet-section"><p class="inline-error" role="alert">' + escapeHtml(text) + '</p><button class="secondary-action wide-action" type="button" data-pair-action="refresh">Tekrar dene</button></section>';
-      }
-    }
-  }
-
-  async function copyInviteCode() {
-    const code = formatInvite(pairState?.inviteCode);
-    try {
-      await navigator.clipboard.writeText(code);
-      showToast("Davet kodu kopyalandı");
-    } catch (_error) {
-      showToast("Kod: " + code);
-    }
-  }
-
-  function urlBase64ToUint8Array(base64String) {
-    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-    const base64 = (base64String + padding).replaceAll("-", "+").replaceAll("_", "/");
-    const rawData = window.atob(base64);
-    return Uint8Array.from(Array.from(rawData).map(function (character) {
-      return character.charCodeAt(0);
-    }));
-  }
-
-  function isIos() {
-    return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-  }
-
-  function isStandalone() {
-    return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
-  }
-
-  async function enableNotifications() {
-    try {
-      if (!config.vapidPublicKey) throw new Error("Bildirim anahtarı henüz ayarlanmadı.");
-      if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
-        throw new Error("Bu tarayıcı bildirimleri desteklemiyor.");
-      }
-      if (isIos() && !isStandalone()) {
-        throw new Error("iPhone’da önce Paylaş → Ana Ekrana Ekle ile uygulamayı kur.");
-      }
-      await ensureBackend();
-      const permission = await Notification.requestPermission();
-      if (permission !== "granted") throw new Error("Bildirim izni verilmedi.");
-      const registration = await navigator.serviceWorker.ready;
+      // Permission is requested directly from the user's tap, before network awaits.
+      if (enable && await Notification.requestPermission() !== 'granted') throw new Error('Bildirim izni verilmedi.');
+      const api = await backend();
+      const registration = await deadline(navigator.serviceWorker.ready, 6000);
       let subscription = await registration.pushManager.getSubscription();
-      if (!subscription) {
-        subscription = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(config.vapidPublicKey)
-        });
+      if (enable) {
+        if (!config.vapidPublicKey) throw new Error('Bildirim kurulumu tamamlanmamış.');
+        const wantedKey = keyBytes(config.vapidPublicKey);
+        if (subscription?.options.applicationServerKey && String(new Uint8Array(subscription.options.applicationServerKey)) !== String(wantedKey)) {
+          const removed = await api.from('push_subscriptions').delete().eq('user_id', pair().userId).eq('endpoint', subscription.endpoint);
+          if (removed.error) throw removed.error;
+          await subscription.unsubscribe(); subscription = null;
+        }
+        subscription ||= await deadline(registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: wantedKey }), 10000);
+        await registerSubscription(api, subscription);
+      } else if (subscription) {
+        const result = await api.from('push_subscriptions').delete().eq('user_id', pair().userId).eq('endpoint', subscription.endpoint);
+        if (result.error) throw result.error;
+        await subscription.unsubscribe();
       }
-      const json = subscription.toJSON();
-      if (!json.keys?.p256dh || !json.keys?.auth) throw new Error("Bildirim kaydı alınamadı.");
-      const result = await supabase.from("push_subscriptions").upsert({
-        user_id: authUser.id,
-        endpoint: subscription.endpoint,
-        p256dh: json.keys.p256dh,
-        auth: json.keys.auth,
-        updated_at: new Date().toISOString()
-      }, { onConflict: "endpoint" });
-      if (result.error) throw result.error;
-      await updateMyProfile({ notifications_enabled: true });
-      await refreshPairData("Bildirimler bu cihazda açıldı.");
-    } catch (error) {
-      renderTogetherPaired(pairErrorMessage(error));
-    }
+      store.commit(state => { state.notificationsWanted = enable; });
+      deviceState = enable ? 'on' : 'off';
+    } catch (error) { deviceNote = errorText(error); }
+    finally { deviceBusy = false; renderDeviceControls(); }
   }
-
-  async function sendReminder(recipientId) {
+  async function sendReminder() {
+    if (reminderBusy || Date.now() < nextReminderAt) return;
+    const partner = store.state.shared.members.find(member => member.user_id !== pair()?.userId);
+    if (!partner) throw new Error('Diğer kişi henüz eşleşmeye katılmadı.');
+    reminderBusy = true; renderTogether();
     try {
-      await ensureBackend();
-      const result = await supabase.from("notification_jobs").insert({
-        room_id: pairState.roomId,
-        sender_user_id: authUser.id,
-        recipient_user_id: recipientId,
-        kind: "drink_water"
-      });
+      const api = await backend();
+      const result = await api.from('notification_jobs').insert({ room_id: pair().roomId, sender_user_id: pair().userId, recipient_user_id: partner.user_id, kind: 'drink_water' }).select('id,status,error,created_at').single();
       if (result.error) throw result.error;
-      renderTogetherPaired("Hatırlatma gönderildi.");
-    } catch (error) {
-      renderTogetherPaired(pairErrorMessage(error));
+      lastJob = result.data; nextReminderAt = Date.now() + 30000;
+      store.commit(state => { state.lastJob = lastJob; });
+      pollJob();
+    } finally { reminderBusy = false; renderTogether(); }
+  }
+  async function pollJob() {
+    clearTimeout(jobTimer);
+    if (!lastJob || ['sent','failed'].includes(lastJob.status) || !navigator.onLine || document.hidden) return;
+    try {
+      const api = await backend();
+      const result = await api.from('notification_jobs').select('id,status,error,created_at').eq('id', lastJob.id).maybeSingle();
+      if (result.error) throw result.error;
+      if (result.data) { lastJob = result.data; store.commit(state => { state.lastJob = lastJob; }); }
+    } catch { /* Keep the last known state; never report unconfirmed success. */ }
+    finally {
+      if ($('together-dialog').open) renderTogether();
+      if (lastJob && !['sent','failed'].includes(lastJob.status)) jobTimer = setTimeout(pollJob, lastJob.status === 'retry' ? 30000 : 4000);
     }
   }
-
-  function startTogetherRefreshTimer() {
-    clearInterval(togetherRefreshTimer);
-    togetherRefreshTimer = window.setInterval(function () {
-      if (byId("together-dialog").open && pairState && navigator.onLine) refreshPairData();
-    }, 30000);
+  async function copy(text) {
+    try { await navigator.clipboard.writeText(text); showToast('Kopyalandı'); }
+    catch { showToast('Metne basılı tutarak kopyalayabilirsin.'); }
+  }
+  async function createRecovery() {
+    const button = $('generate-recovery'); button.disabled = true;
+    try {
+      const api = await backend();
+      const raw = Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+      const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+      const result = await api.rpc('set_recovery_code', { p_hash: hash });
+      if (result.error) throw result.error;
+      recoveryCode = raw.match(/.{1,8}/g).join('-');
+      $('recovery-code').value = recoveryCode; $('recovery-result').hidden = false;
+      button.textContent = 'Yeni kod oluştur';
+    } finally { button.disabled = false; }
+  }
+  function openSettings() {
+    for (const [key, value] of Object.entries(settings().glasses)) $(key + '-input').value = value;
+    $('goal-input').value = settings().goal;
+    document.querySelector('input[name="palette"][value="' + settings().palette + '"]').checked = true;
+    document.querySelector('input[name="mode"][value="' + settings().mode + '"]').checked = true;
+    $('settings-error').textContent = ''; openDialog($('settings-dialog'));
+    $('recovery-open').hidden = !pair();
+    renderDeviceControls(); inspectDevice(); renderUpdate();
+  }
+  function renderUpdate() {
+    $('update-app').hidden = !window.SU_REGISTRATION?.waiting;
+    $('offline-status').textContent = window.SU_OFFLINE_FAILED ? 'Çevrimdışı dosyalar yüklenemedi. Bağlantıyla yeniden aç.' : navigator.serviceWorker?.controller ? 'Çevrimdışı açılış hazır' : 'Çevrimdışı dosyalar hazırlanıyor…';
+  }
+  function openTogether() {
+    renderTogether(); openDialog($('together-dialog'));
+    clearInterval(refreshTimer);
+    refreshTimer = setInterval(() => { if (!document.hidden) { refreshTogether(); pollJob(); } }, 30000);
+    if (pair()) { refreshTogether(); inspectDevice(); pollJob(); }
   }
 
-  function openTogetherDialog() {
-    const dialog = byId("together-dialog");
-    if (!dialog.open) dialog.showModal();
-    startTogetherRefreshTimer();
-    if (!pairState) {
-      renderTogetherSetup();
-      return;
-    }
-    renderTogetherLoading();
-    refreshPairData();
-  }
-
-  document.addEventListener("click", function (event) {
-    const target = event.target.closest("button");
-    if (!target) return;
-
-    if (target.dataset.amount) {
-      addAmount(Number(target.dataset.amount));
-      return;
-    }
-    if (target.dataset.glass) {
-      addAmount(settings.glasses[target.dataset.glass]);
-      return;
-    }
-    if (target.hasAttribute("data-custom-add")) {
-      addAmount(settings.customAmount);
-      return;
-    }
-    if (target.hasAttribute("data-custom-edit")) {
-      openCustomDialog();
-      return;
-    }
-    if (target.dataset.delete) {
-      removeEntry(target.dataset.delete);
-      return;
-    }
-
-    const pairAction = target.dataset.pairAction;
-    if (!pairAction || target.disabled) return;
-    if (pairAction === "create") createPair();
-    if (pairAction === "join") joinPair();
-    if (pairAction === "copy") copyInviteCode();
-    if (pairAction === "notifications") enableNotifications();
-    if (pairAction === "remind") sendReminder(target.dataset.recipient);
-    if (pairAction === "refresh") {
-      renderTogetherLoading();
-      refreshPairData();
+  document.addEventListener('click', event => {
+    const button = event.target.closest('button');
+    if (!button || button.disabled) return;
+    action(async () => {
+      if (button.dataset.amount) add(Number(button.dataset.amount));
+      else if (button.dataset.glass) add(settings().glasses[button.dataset.glass]);
+      else if (button.hasAttribute('data-custom-add')) add(settings().customAmount);
+      else if (button.hasAttribute('data-custom-new') || button.hasAttribute('data-custom-edit')) {
+        $('custom-form').dataset.add = button.hasAttribute('data-custom-new') ? 'yes' : 'no';
+        $('custom-input').value = settings().customAmount || '';
+        $('custom-save').textContent = button.hasAttribute('data-custom-new') ? 'Kaydet ve ekle' : 'Kaydet';
+        $('custom-error').textContent = ''; openDialog($('custom-dialog')); $('custom-input').focus({ preventScroll: true });
+      } else if (button.dataset.delete) remove(button.dataset.delete);
+      else if (button.dataset.close) closeDialog($(button.dataset.close));
+      else if (button.dataset.historyDay) openHistory(button.dataset.historyDay);
+      else if (button.dataset.notifications) await notifications(button.dataset.notifications === 'on');
+      else if (button.dataset.range) { historyEnd = [shiftDay(historyEnd, Number(button.dataset.range)), store.today()].sort()[0]; renderTogether(); refreshTogether(); }
+      else if (button.dataset.pairAction) {
+        const kind = button.dataset.pairAction;
+        if (['create','join','restore'].includes(kind)) await pairAction(kind);
+        else if (kind === 'copy') await copy(pair().inviteCode);
+        else if (kind === 'refresh') await refreshTogether();
+        else if (kind === 'remind') await sendReminder();
+      }
+    });
+  });
+  $('toast-action').addEventListener('click', () => action(() => { const undo = toastUndo; toastUndo = null; $('toast').hidden = true; if (undo) undo(); }));
+  $('settings-button').addEventListener('click', openSettings);
+  $('together-button').addEventListener('click', openTogether);
+  $('all-records').addEventListener('click', () => openHistory());
+  $('history-previous').addEventListener('click', () => openHistory(shiftDay(historyDay, -1)));
+  $('history-next').addEventListener('click', () => { if (historyDay < store.today()) openHistory(shiftDay(historyDay, 1)); });
+  $('history-date').addEventListener('change', event => { if (/^\d{4}-\d\d-\d\d$/.test(event.target.value) && event.target.value <= store.today()) openHistory(event.target.value); });
+  document.addEventListener('change', event => {
+    if (event.target.id === 'pair-history-date' && /^\d{4}-\d\d-\d\d$/.test(event.target.value) && event.target.value <= store.today()) {
+      historyEnd = event.target.value; renderTogether(); refreshTogether();
     }
   });
-
-  byId("settings-button").addEventListener("click", openSettingsDialog);
-  byId("together-button").addEventListener("click", openTogetherDialog);
-  byId("together-close").addEventListener("click", function () {
-    byId("together-dialog").close();
-  });
-  byId("together-dialog").addEventListener("close", function () {
-    clearInterval(togetherRefreshTimer);
-  });
-
-  byId("custom-input").addEventListener("input", function (event) {
-    event.target.value = event.target.value.replace(/\D/g, "").slice(0, 4);
-  });
-
-  byId("custom-form").addEventListener("submit", function (event) {
-    if (event.submitter && event.submitter.value === "cancel") return;
+  $('custom-form').addEventListener('submit', event => {
     event.preventDefault();
-    const amount = safeNumber(byId("custom-input").value, settings.customAmount || 250, 50, 3000);
-    settings.customAmount = amount;
-    saveSettings();
-    byId("custom-dialog").close();
-    addAmount(amount);
+    try {
+      const amount = amountValue($('custom-input').value, 1, 3000);
+      store.settings({ customAmount: amount });
+      if ($('custom-form').dataset.add === 'yes') add(amount); else showToast('Özel miktar kaydedildi');
+      closeDialog($('custom-dialog')); requestSync();
+    } catch (error) { $('custom-error').textContent = errorText(error); }
   });
-
-  byId("settings-form").addEventListener("submit", function (event) {
-    if (event.submitter && event.submitter.value === "cancel") return;
+  $('settings-form').addEventListener('submit', event => {
     event.preventDefault();
-    settings.goal = safeNumber(byId("goal-input").value, settings.goal, 500, 6000);
-    settings.glasses.small = safeNumber(byId("small-input").value, settings.glasses.small, 50, 1500);
-    settings.glasses.medium = safeNumber(byId("medium-input").value, settings.glasses.medium, 50, 1500);
-    settings.glasses.large = safeNumber(byId("large-input").value, settings.glasses.large, 50, 1500);
-    const paletteChoice = document.querySelector('input[name="palette"]:checked');
-    const modeChoice = document.querySelector('input[name="mode"]:checked');
-    settings.palette = paletteChoice ? paletteChoice.value : settings.palette;
-    settings.mode = modeChoice ? modeChoice.value : settings.mode;
-    saveSettings();
-    applyTheme();
-    byId("settings-dialog").close();
-    render();
-    showToast("Ayarlar kaydedildi");
-    if (pairState && navigator.onLine) updateMyProfile().catch(function () {});
+    try {
+      const goal = amountValue($('goal-input').value, 500, 6000);
+      const glasses = Object.fromEntries(['small','medium','large'].map(key => [key, amountValue($(key + '-input').value, 50, 1500)]));
+      store.settings({ goal, glasses, palette: document.querySelector('input[name="palette"]:checked').value, mode: document.querySelector('input[name="mode"]:checked').value });
+      applyTheme(); closeDialog($('settings-dialog')); requestSync(); showToast('Ayarlar kaydedildi');
+    } catch (error) { $('settings-error').textContent = errorText(error); }
   });
-
-  [byId("custom-dialog"), byId("settings-dialog")].forEach(function (dialog) {
-    dialog.addEventListener("click", function (event) {
-      if (event.target === dialog) dialog.close();
+  $('recovery-open').addEventListener('click', () => { $('recovery-result').hidden = true; openDialog($('recovery-dialog')); });
+  $('generate-recovery').addEventListener('click', () => action(createRecovery));
+  $('copy-recovery').addEventListener('click', () => action(() => copy(recoveryCode)));
+  $('update-app').addEventListener('click', () => {
+    window.SU_APPLY_UPDATE = true; window.SU_REGISTRATION?.waiting?.postMessage({ type: 'ACTIVATE_UPDATE' });
+  });
+  document.querySelectorAll('dialog').forEach(dialog => {
+    dialog.addEventListener('cancel', event => { event.preventDefault(); closeDialog(dialog); });
+    dialog.addEventListener('click', event => {
+      const rect = dialog.getBoundingClientRect();
+      if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) closeDialog(dialog);
+    });
+    dialog.addEventListener('close', () => {
+      if (!document.querySelector('dialog[open]')) document.documentElement.classList.remove('modal-open');
+      if (dialog.id === 'together-dialog') clearInterval(refreshTimer);
+      if (dialog.id === 'recovery-dialog') { recoveryCode = ''; $('recovery-code').value = ''; }
     });
   });
-
-  window.setInterval(function () {
-    const currentDay = dayKey(new Date());
-    if (currentDay !== today) {
-      today = currentDay;
-      render();
-      if (pairState && navigator.onLine) refreshPairData().catch(function () {});
+  const wake = () => {
+    if (document.hidden) { clearTimeout(syncTimer); clearTimeout(jobTimer); return; }
+    const today = store.today();
+    if (lastDay !== today) {
+      if (historyEnd === lastDay) historyEnd = today;
+      if (historyDay === lastDay) historyDay = today;
+      lastDay = today;
     }
-  }, 60000);
-
-  window.addEventListener("online", function () {
-    if (!pairState) return;
-    syncAll()
-      .then(function () { return refreshPairData(); })
-      .catch(function () {});
+    render(); requestSync();
+    if ($('together-dialog').open) refreshTogether();
+    if (pair()) { inspectDevice(); pollJob(); }
+  };
+  window.addEventListener('online', wake);
+  window.addEventListener('offline', () => { render(); renderDeviceControls(); });
+  document.addEventListener('visibilitychange', wake);
+  window.addEventListener('pageshow', wake);
+  window.addEventListener('su-update', renderUpdate);
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+  setInterval(() => {
+    if (document.hidden) return;
+    if (lastDay !== store.today()) wake();
+    if (nextReminderAt && Date.now() >= nextReminderAt) { nextReminderAt = 0; if ($('together-dialog').open) renderTogether(); }
+  }, 1000);
+  const viewport = () => { if (!window.visualViewport || window.visualViewport.scale === 1) document.documentElement.style.setProperty('--visible-height', (window.visualViewport?.height || innerHeight) + 'px'); };
+  window.visualViewport?.addEventListener('resize', viewport); viewport();
+  store.subscribe(render);
+  lastJob = store.state.lastJob || null;
+  applyTheme(); render(); window.SU_READY = true; $('startup-status').hidden = true;
+  if (pair()) { requestSync(); inspectDevice(); }
+  else if (navigator.onLine && config.supabaseUrl) action(async () => {
+    const api = await backend({ create: false });
+    if (!api) return;
+    const result = await api.rpc('current_pair');
+    if (result.error) throw result.error;
+    const row = result.data?.[0];
+    if (row) {
+      store.pair({ roomId: row.room_id, inviteCode: row.invite_code, userId: row.user_id, displayName: row.display_name });
+      store.settings({ goal: row.daily_goal }); requestSync();
+      await loadRange(shiftDay(store.today(), -6), store.today());
+    }
   });
-
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", function () {
-      navigator.serviceWorker
-        .register("/sw.js?release=6", { updateViaCache: "none" })
-        .then(function (registration) { return registration.update(); })
-        .catch(function () {});
-    });
-  }
-
-  const colorScheme = window.matchMedia("(prefers-color-scheme: dark)");
-  if (typeof colorScheme.addEventListener === "function") {
-    colorScheme.addEventListener("change", function () {
-      if (settings.mode === "system") applyTheme();
-    });
-  }
-
-  applyTheme();
-  render();
-
-  if (pairState && backendConfigured() && navigator.onLine) {
-    window.setTimeout(function () {
-      ensureBackend()
-        .then(function () { return syncAll(); })
-        .then(function () { return refreshPairData(); })
-        .catch(function () {});
-    }, 300);
-  }
-
-  if (new URLSearchParams(window.location.search).get("birlikte") === "1") {
-    window.history.replaceState({}, "", window.location.pathname);
-    window.setTimeout(openTogetherDialog, 250);
-  }
-})();
+  if (new URLSearchParams(location.search).get('birlikte') === '1') { history.replaceState({}, '', location.pathname); openTogether(); }
+}
+main();

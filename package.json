@@ -1,18 +1,21 @@
 {
   "name": "su-pwa-ortak",
-  "version": "4.0.2",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "check": "node scripts/validate.mjs"
+    "check": "node scripts/validate.mjs",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0"
+    "@electric-sql/pglite": "^0.3.14",
+    "esbuild": "^0.25.0",
+    "happy-dom": "^20.0.11"
   },
   "engines": {
     "node": ">=22"

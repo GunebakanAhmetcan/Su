@@ -14,7 +14,7 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <script>
       try {
-        var savedTheme = JSON.parse(localStorage.getItem("su:settings:v1") || "{}");
+        var savedTheme = JSON.parse(localStorage.getItem("su:data:v5") || "null")?.settings || JSON.parse(localStorage.getItem("su:settings:v1") || "{}");
         var palettes = ["ocean", "olive", "sand", "white"];
         var modes = ["system", "light", "dark"];
         var palette = palettes.includes(savedTheme.palette) ? savedTheme.palette : "ocean";
@@ -56,6 +56,8 @@
             </button>
           </div>
         </header>
+        <p id="startup-status" class="inline-error" role="alert" hidden></p>
+        <p id="sync-status" class="sync-status" role="status" hidden></p>
 
         <section class="meter-section" aria-labelledby="today-title">
           <div class="meter-heading">
@@ -103,6 +105,7 @@
             <button class="amount-button" type="button" data-amount="500"><strong>500</strong><span>ml</span></button>
             <div id="custom-slot"></div>
           </div>
+          <button id="custom-edit-link" class="text-action custom-edit-link" type="button" data-custom-edit hidden>Özel miktarı düzenle</button>
         </section>
 
         <section class="log-section" aria-labelledby="records-title">
@@ -111,37 +114,39 @@
             <span id="record-count">Bugün</span>
           </div>
           <div id="entry-content"></div>
+          <button id="all-records" class="text-action" type="button">Geçmişi aç</button>
         </section>
 
         <section class="week-section" aria-labelledby="week-title">
           <div class="section-heading"><h2 id="week-title">Son 7 gün</h2></div>
-          <div class="week-chart" id="week-chart" role="img" aria-label="Son yedi günün su tüketimi"></div>
+          <div class="week-chart" id="week-chart" aria-label="Son yedi günün su tüketimi"></div>
         </section>
       </section>
     </main>
 
-    <dialog class="app-dialog" id="custom-dialog">
-      <form method="dialog" id="custom-form">
+    <dialog class="app-dialog" id="custom-dialog" aria-labelledby="custom-title">
+      <form id="custom-form" novalidate>
         <div class="dialog-heading">
-          <h2>Özel miktar</h2>
-          <button class="dialog-close" value="cancel" type="submit" aria-label="Pencereyi kapat">×</button>
+          <h2 id="custom-title">Özel miktar</h2>
+          <button class="dialog-close" data-close="custom-dialog" type="button" aria-label="Pencereyi kapat">×</button>
         </div>
         <label class="number-field">
           <span>Miktar</span>
           <span class="input-wrap">
-            <input id="custom-input" inputmode="numeric" pattern="[0-9]*" min="50" max="3000" maxlength="4" required aria-label="Özel su miktarı" />
+            <input id="custom-input" inputmode="numeric" pattern="[0-9]*" maxlength="4" required aria-label="Özel su miktarı" aria-describedby="custom-error" />
             <span>ml</span>
           </span>
         </label>
-        <div class="dialog-actions"><button class="primary-action" type="submit" value="default">Kaydet ve ekle</button></div>
+        <p id="custom-error" class="inline-error" role="alert"></p>
+        <div class="dialog-actions"><button id="custom-save" class="primary-action" type="submit">Kaydet ve ekle</button></div>
       </form>
     </dialog>
 
-    <dialog class="app-dialog" id="settings-dialog">
-      <form method="dialog" id="settings-form">
+    <dialog class="app-dialog" id="settings-dialog" aria-labelledby="settings-title">
+      <form id="settings-form" novalidate>
         <div class="dialog-heading">
-          <h2>Ayarlar</h2>
-          <button class="dialog-close" value="cancel" type="submit" aria-label="Pencereyi kapat">×</button>
+          <h2 id="settings-title">Ayarlar</h2>
+          <button class="dialog-close" data-close="settings-dialog" type="button" aria-label="Pencereyi kapat">×</button>
         </div>
         <div class="theme-controls">
           <fieldset class="theme-fieldset">
@@ -168,8 +173,15 @@
           <label class="compact-field"><span>Orta bardak</span><span class="compact-input"><input id="medium-input" inputmode="numeric" /><span>ml</span></span></label>
           <label class="compact-field"><span>Büyük bardak</span><span class="compact-input"><input id="large-input" inputmode="numeric" /><span>ml</span></span></label>
         </div>
-        <div class="dialog-actions"><button class="primary-action" type="submit" value="default">Kaydet</button></div>
+        <p id="settings-error" class="inline-error" role="alert"></p>
+        <div class="dialog-actions"><button class="primary-action" type="submit">Kaydet</button></div>
       </form>
+      <div class="settings-extra">
+        <div data-device-controls></div>
+        <button id="recovery-open" class="secondary-action wide-action" type="button" hidden>Kurtarma kodum</button>
+        <button id="update-app" class="primary-action wide-action" type="button" hidden>Güncellemeyi aç</button>
+        <p id="offline-status" class="sheet-note" role="status"></p>
+      </div>
     </dialog>
 
     <dialog class="side-sheet" id="together-dialog" aria-labelledby="together-title">
@@ -179,11 +191,45 @@
             <p class="brand">SU</p>
             <h2 id="together-title">Birlikte</h2>
           </div>
-          <button class="dialog-close" id="together-close" type="button" aria-label="Birlikte bölümünü kapat">×</button>
+          <button class="dialog-close" data-close="together-dialog" type="button" aria-label="Birlikte bölümünü kapat">×</button>
         </header>
         <div class="sheet-content" id="together-content">
           <p class="loading-line">Yükleniyor…</p>
         </div>
+      </div>
+    </dialog>
+
+    <dialog class="side-sheet" id="history-dialog" aria-labelledby="history-title">
+      <div class="sheet-shell">
+        <header class="sheet-header">
+          <div><p class="brand">SU</p><h2 id="history-title">Geçmiş</h2></div>
+          <button class="dialog-close" data-close="history-dialog" type="button" aria-label="Geçmişi kapat">×</button>
+        </header>
+        <div class="sheet-content">
+          <section class="sheet-section">
+            <div class="history-nav">
+              <button id="history-previous" type="button" aria-label="Önceki gün">‹</button>
+              <label><span class="sr-only">Gün seç</span><input id="history-date" type="date" /></label>
+              <button id="history-next" type="button" aria-label="Sonraki gün">›</button>
+            </div>
+            <p id="history-total" class="history-total" aria-live="polite">0 ml</p>
+            <div id="history-entries"></div>
+          </section>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog class="app-dialog" id="recovery-dialog" aria-labelledby="recovery-title">
+      <div class="dialog-heading">
+        <h2 id="recovery-title">Kurtarma kodum</h2>
+        <button class="dialog-close" data-close="recovery-dialog" type="button" aria-label="Kurtarma kodunu kapat">×</button>
+      </div>
+      <p class="sheet-note">Telefon değiştirirken eşleşmeni geri getirir. Kodu yalnızca kendin için sakla. Yeni kod oluşturmak önceki kodu geçersiz kılar.</p>
+      <button id="generate-recovery" class="secondary-action wide-action" type="button">Kod oluştur</button>
+      <div id="recovery-result" hidden>
+        <label class="sheet-field"><span>Kurtarma kodun</span><textarea id="recovery-code" rows="4" readonly spellcheck="false"></textarea></label>
+        <button id="copy-recovery" class="primary-action wide-action" type="button">Kopyala</button>
+        <p class="sheet-note">Bu kod tekrar gösterilmez ve bir kez kullanılabilir.</p>
       </div>
     </dialog>
 
@@ -192,7 +238,8 @@
       <button id="toast-action" type="button">Geri al</button>
     </div>
 
-    <script src="/config.js"></script>
+    <script src="/boot.js" defer></script>
+    <script src="/config.js" defer></script>
     <script src="/app.js" defer></script>
   </body>
 </html>

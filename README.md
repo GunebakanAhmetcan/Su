@@ -1,4 +1,4 @@
-# Su — iki kişilik PWA
+# Su v5 — iki kişilik PWA
 
 Ana ekranı kişisel kalan, iki kişinin geçmişini ayrı bir panelde gösteren su takip uygulaması.
 
@@ -6,16 +6,20 @@ Ana ekranı kişisel kalan, iki kişinin geçmişini ayrı bir panelde gösteren
 
 - Küçük, orta ve büyük bardakla tek dokunuşla ekleme
 - 100, 250, 500 ml ve kaydedilen özel miktar
-- Geri alma, kayıt silme ve son yedi gün grafiği
+- Kalıcı ekleme/silme kuyruğu, güvenilir geri alma ve son yedi gün grafiği
 - Deniz, zeytin, bej ve beyaz temalar
 - Açık, koyu ve sistem görünümü
-- Çevrimdışı kişisel kayıt
+- Kayıtlı dosyalardan ağ beklemeden açılış ve çevrimdışı kişisel kayıt
 - Davet koduyla en fazla iki cihazı eşleştirme
-- Ayrı Birlikte panelinde iki kişinin yedi günlük tablosu
-- Diğer kişiye web push hatırlatması
+- Ayrı Birlikte panelinde tarihle seçilebilen ortak geçmiş, yerel önbellek
+- Cihazın bildirim aboneliğini açma, kapatma, onarma; gönderim durumu ve otomatik tekrar deneme
+- Tek kullanımlık kişisel kurtarma koduyla cihaz aktarımı
+- Çift dokunmayla yakınlaşmayı önleyen davranış; iki parmakla yakınlaşma açık
+- Daha büyük düğmeler, okunaklı yazılar ve kısa açılış/kapanış geçişleri
+- Özel miktarı düzenleme ve su ekleme ayrı işlemler
 - Supabase Row Level Security ile eşleşme dışındaki verileri kapatma
 
-Kurulum için **KURULUM.md** dosyasını sırayla uygula.
+Mevcut uygulamayı güncellemek için **GUNCELLEME.md**, sıfırdan kurulum için **KURULUM.md** dosyasını izle.
 
 ## GitHub → Netlify
 
@@ -26,3 +30,26 @@ Netlify ayarları **netlify.toml** içindedir:
 - Functions directory: **netlify/functions**
 
 Yeni güncellemelerde kaynak dosyaları GitHub repository'ye yükleyip commit etmek yeterlidir; Netlify otomatik yayınlar.
+
+## Geliştirme ve test
+
+Node 22 veya üzeri:
+
+```sh
+npm ci
+npm test
+npm run check
+npm run build
+```
+
+Testler gerçek servislere istek göndermez. Veri kuyruğu, PostgreSQL/RLS ve kurtarma, bildirim göndericisi, service worker ve DOM etkileşimleri yerel ortamda sınanır. DOM testleri gerçek iPhone/Safari görsel testi değildir. Cihazdaki son kontrol adımları GUNCELLEME.md içindedir.
+
+Tarayıcı paketine yalnızca build dosyasında açıkça seçilmiş üç PUBLIC_ değeri girer. Özel anahtarları kaynak dosyalara yazma.
+
+## Sınırlar
+
+İlk kez açılan cihazın siteye erişebilen bir internet bağlantısı gerekir. Operatör/DNS kaynaklı erişim sorunu uygulama koduyla garanti olarak çözülmez. Dosyaları kaydedilmiş cihazda kişisel takip çevrimdışı çalışır. Ortak veri eşitlemesi ve bildirim gönderimi internet ister.
+
+“Gönderim servisine iletildi” telefonun bildirimi ekranda gösterdiğinin kanıtı değildir. Telefonun bağlantısı, izinleri ve Odak ayarları etkiler. Tekrar denemeler üretim Netlify yayınında 10 dakikalık zamanlanmış görevle yapılır; uygulamanın açık kalması gerekmez. Bir bildirim en fazla dört gönderim denemesi yapar ve bir saat sonra zaman aşımına düşer.
+
+Kurtarma kodu yalnızca sunucuya eşitlenmiş verileri geri getirir. Yeni kod önceki kodu iptal eder; aktarım kodu tek kullanımlıktır. Kodun kendisi veritabanına kaydedilmez, SHA-256 özeti özel şemada saklanır.
