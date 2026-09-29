@@ -213,10 +213,27 @@
               <button id="history-next" type="button" aria-label="Sonraki gün">›</button>
             </div>
             <p id="history-total" class="history-total" aria-live="polite">0 ml</p>
+            <button id="history-add" class="primary-action wide-action" type="button">Bu güne su ekle</button>
             <div id="history-entries"></div>
           </section>
         </div>
       </div>
+    </dialog>
+
+    <dialog class="app-dialog" id="record-dialog" aria-labelledby="record-title" aria-describedby="record-day-label">
+      <form id="record-form" novalidate>
+        <div class="dialog-heading">
+          <h2 id="record-title">Su ekle</h2>
+          <button class="dialog-close" data-close="record-dialog" type="button" aria-label="Kaydı düzenleme penceresini kapat">×</button>
+        </div>
+        <p id="record-day-label" class="record-date-label"></p>
+        <label class="number-field">
+          <span id="record-amount-label">Bu güne eklenecek miktar</span>
+          <span class="input-wrap"><input id="record-amount" inputmode="numeric" pattern="[0-9]*" maxlength="5" required aria-describedby="record-error" /><span>ml</span></span>
+        </label>
+        <p id="record-error" class="inline-error" role="alert"></p>
+        <div class="dialog-actions"><button id="record-save" class="primary-action" type="submit">Seçilen güne ekle</button></div>
+      </form>
     </dialog>
 
     <dialog class="app-dialog" id="recovery-dialog" aria-labelledby="recovery-title">

@@ -462,6 +462,13 @@ input:focus-visible {
   stroke-width: 1.8;
 }
 
+.edit-entry { display: inline-flex; width: 44px; height: 44px; flex-shrink: 0; align-items: center; justify-content: center; margin-left: 6px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted-foreground); cursor: pointer; }
+.edit-entry svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.edit-entry:hover { background: var(--water-soft); color: var(--foreground); }
+#history-entries { margin-top: 16px; }
+.entry-list time.late-entry { width: 66px; font-family: var(--font-sans); font-size: .75rem; }
+.record-date-label { margin: 12px 0 0; color: var(--foreground); font-size: 1rem; font-weight: 600; }
+
 .custom-empty strong {
   font-family: var(--font-sans);
 }

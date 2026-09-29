@@ -49,4 +49,4 @@ for (const file of [...staticFiles, "app.js", "config.js"].sort()) hash.update(a
 const worker = await readFile(resolve(projectRoot, "sw.js"), "utf8");
 hash.update(worker);
 await writeFile(resolve(outputDir, "sw.js"), worker.replace("__BUILD_ID__", hash.digest("hex").slice(0, 16)));
-console.log("Su PWA v5 build hazır.");
+console.log("Su PWA v5.1 build hazır.");

@@ -1,4 +1,4 @@
-# Su v5 — iki kişilik PWA
+# Su v5.1 — iki kişilik PWA
 
 Ana ekranı kişisel kalan, iki kişinin geçmişini ayrı bir panelde gösteren su takip uygulaması.
 
@@ -17,9 +17,14 @@ Ana ekranı kişisel kalan, iki kişinin geçmişini ayrı bir panelde gösteren
 - Çift dokunmayla yakınlaşmayı önleyen davranış; iki parmakla yakınlaşma açık
 - Daha büyük düğmeler, okunaklı yazılar ve kısa açılış/kapanış geçişleri
 - Özel miktarı düzenleme ve su ekleme ayrı işlemler
+- Geçmişte gün seçip toplu miktar ekleme; mevcut kaydın miktarını düzenleme ve geri alma
 - Supabase Row Level Security ile eşleşme dışındaki verileri kapatma
 
 Mevcut uygulamayı güncellemek için **GUNCELLEME.md**, sıfırdan kurulum için **KURULUM.md** dosyasını izle.
+
+V5.1'de geçmiş kaydı: **Kayıtlar → Geçmişi aç → gün seç → Bu güne su ekle**. Bir kaydı değiştirmek için yanındaki kaleme dokun. Girilen miktar o günün toplamına eklenir; kalemle düzenleme ise mevcut kaydı değiştirir. Sonradan girilen kayıtlar “Sonradan” olarak görünür. Bu ekran tek kayıtta 1–10.000 ml kabul eder. Ana ekranın özel miktar ayarı değişmez.
+
+V5 SQL güncellemesi zaten uygulandıysa bu sürüm için yeni SQL veya ortam değişkeni gerekmez.
 
 ## GitHub → Netlify
 

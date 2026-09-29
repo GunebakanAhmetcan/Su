@@ -97,3 +97,54 @@ test('editing custom amount is persistent and adds no entry', () => {
   const {store,storage}=fixture(); store.settings({customAmount:375});
   assert.equal(store.total(),0); assert.equal(new WaterStore(storage).state.settings.customAmount,375);
 });
+
+test('backdated bulk additions keep the selected day across reload and synchronization', async () => {
+  const { store, storage, setTime } = fixture();
+  setTime(new Date('2026-09-13T00:05:00').getTime());
+  store.pair({ userId: 'me', roomId: 'room' });
+  const id = store.add(4500, '2026-09-12');
+  assert.equal(store.total(), 0);
+  assert.equal(store.total('2026-09-12'), 4500);
+  const restored = new WaterStore(storage); let uploaded;
+  await new SyncEngine(restored, { async write(batch) { uploaded = batch; return []; }, async profile() {} }).run();
+  assert.equal(uploaded[0].entry.day, '2026-09-12');
+  assert.equal(uploaded[0].entry.clientId, id);
+  assert.equal(restored.entriesFor('2026-09-12')[0].amount, 4500);
+});
+
+test('editing an in-flight backdated entry keeps its identity and sends the newer amount', async () => {
+  const { store } = fixture(); store.pair({ userId: 'me', roomId: 'room' });
+  const id = store.add(250, '2026-09-11');
+  const original = { ...store.entriesFor('2026-09-11')[0] };
+  const started = deferred(), unblock = deferred(), sent = [];
+  const engine = new SyncEngine(store, {
+    async write(batch) { sent.push(batch); if(sent.length === 1) { started.resolve(); await unblock.promise; } return []; },
+    async profile() {}
+  });
+  const task = engine.run(); await started.promise;
+  const previous = store.edit(id, 2000); unblock.resolve(); await task;
+  assert.equal(previous.amount, 250);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1][0].entry.amount, 2000);
+  assert.equal(sent[1][0].entry.clientId, id);
+  assert.equal(sent[1][0].entry.day, original.day);
+  assert.equal(sent[1][0].entry.createdAt, original.createdAt);
+  assert.equal(store.state.entries.length, 1);
+  assert.equal(Object.keys(store.state.outbox).length, 0);
+  store.edit(id, previous.amount);
+  assert.equal(store.total('2026-09-11'), 250);
+  assert.ok(store.state.outbox[id].revision > sent[1][0].revision);
+});
+
+test('backdating rejects impossible and future dates without adding water', () => {
+  const { store } = fixture();
+  for(const day of ['2026-09-13', '2026-02-30', 'bad', '2026-13-01']) assert.throws(() => store.add(100, day));
+  assert.equal(store.state.entries.length, 0);
+});
+
+test('editing a missing record or invalid quantity changes nothing', () => {
+  const { store } = fixture(); const id = store.add(250, '2026-09-11');
+  assert.throws(() => store.edit('missing', 500), /bulunmuyor/);
+  for(const amount of [0, -2, 1.5, 10001]) assert.throws(() => store.edit(id, amount));
+  assert.equal(store.total('2026-09-11'), 250);
+});

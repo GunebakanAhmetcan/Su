@@ -171,9 +171,9 @@ function main() {
     Object.assign(document.documentElement.dataset, { palette: theme.palette, mode: theme.mode, resolved: dark ? 'dark' : 'light' });
     $('theme-color').content = background[theme.palette][dark ? 1 : 0];
   }
-  function add(amount) {
-    const id = store.add(amount);
-    showToast(number(amount) + ' ml eklendi', () => { store.remove(id); requestSync(); });
+  function add(amount, day = store.today()) {
+    const id = store.add(amount, day);
+    showToast((day === store.today() ? '' : dateLabel(day) + ' · ') + number(amount) + ' ml eklendi', () => { store.remove(id); requestSync(); });
     requestSync();
   }
   function remove(id) {
@@ -181,7 +181,7 @@ function main() {
     if (entry) showToast(number(entry.amount) + ' ml silindi', () => { store.restore(entry); requestSync(); });
     requestSync();
   }
-  function renderList(container, entries) {
+  function renderList(container, entries, editable = false) {
     if (!container.querySelector('.entry-list')) container.innerHTML = '<ul class="entry-list"></ul><p class="empty-log">Bu gün için kayıt yok.</p>';
     const list = container.querySelector('ul');
     container.querySelector('p').hidden = entries.length > 0;
@@ -192,13 +192,20 @@ function main() {
       let node = existing.get(entry.clientId);
       if (!node) {
         node = document.createElement('li'); node.dataset.id = entry.clientId;
-        node.innerHTML = '<time></time><span class="entry-rule" aria-hidden="true"></span><strong></strong><button class="delete-entry" type="button" aria-label="Kaydı sil"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/></svg></button>';
+        node.innerHTML = '<time></time><span class="entry-rule" aria-hidden="true"></span><strong></strong>' + (editable ? '<button class="edit-entry" type="button" aria-label="Kaydı düzenle"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15z"/></svg></button>' : '') + '<button class="delete-entry" type="button" aria-label="Kaydı sil"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/></svg></button>';
       }
-      node.querySelector('time').textContent = clockLabel(entry.createdAt);
+      const enteredLater = entry.day !== dayKey(new Date(entry.createdAt));
+      node.querySelector('time').textContent = enteredLater ? 'Sonradan' : clockLabel(entry.createdAt);
+      node.querySelector('time').classList.toggle('late-entry', enteredLater);
+      node.querySelector('time').title = enteredLater ? 'Kayıt ekleme zamanı: ' + dateLabel(dayKey(new Date(entry.createdAt))) + ' ' + clockLabel(entry.createdAt) : '';
       node.querySelector('time').dateTime = new Date(entry.createdAt).toISOString();
       node.querySelector('strong').textContent = number(entry.amount) + ' ml';
-      node.querySelector('button').dataset.delete = entry.clientId;
-      node.querySelector('button').ariaLabel = clockLabel(entry.createdAt) + ', ' + number(entry.amount) + ' ml kaydını sil';
+      node.querySelector('.delete-entry').dataset.delete = entry.clientId;
+      node.querySelector('.delete-entry').ariaLabel = number(entry.amount) + ' ml kaydını sil';
+      if (editable) {
+        node.querySelector('.edit-entry').dataset.editEntry = entry.clientId;
+        node.querySelector('.edit-entry').ariaLabel = number(entry.amount) + ' ml kaydını düzenle';
+      }
       if (list.children[index] !== node) list.insertBefore(node, list.children[index] || null);
     });
   }
@@ -245,11 +252,27 @@ function main() {
     $('history-date').value = historyDay; $('history-date').max = store.today();
     $('history-total').textContent = number(store.total(historyDay)) + ' ml';
     $('history-next').disabled = historyDay >= store.today();
-    renderList($('history-entries'), store.entriesFor(historyDay));
+    renderList($('history-entries'), store.entriesFor(historyDay), true);
   }
   function openHistory(day = store.today()) {
     historyDay = day; renderHistory(); openDialog($('history-dialog'));
     if (pair() && navigator.onLine) action(() => loadRange(day, day));
+  }
+  function openRecordEditor(id) {
+    const entry = id ? store.state.entries.find(item => item.clientId === id) : null;
+    if (id && !entry) throw new Error('Bu kayıt artık bulunmuyor. Geçmişi yeniden aç.');
+    const form = $('record-form');
+    form.dataset.entryId = id || '';
+    // Keep this date fixed even if midnight passes while the editor is open.
+    form.dataset.day = entry?.day || historyDay;
+    $('record-title').textContent = entry ? 'Kaydı düzenle' : 'Su ekle';
+    $('record-day-label').textContent = new Intl.DateTimeFormat('tr-TR', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(form.dataset.day + 'T12:00:00'));
+    $('record-amount-label').textContent = entry ? 'Kaydın miktarı' : 'Bu güne eklenecek miktar';
+    $('record-amount').value = entry?.amount || settings().customAmount || 250;
+    $('record-save').textContent = entry ? 'Değişikliği kaydet' : 'Seçilen güne ekle';
+    $('record-error').textContent = '';
+    openDialog($('record-dialog'));
+    $('record-amount').focus({ preventScroll: true }); $('record-amount').select();
   }
   async function loadRange(from, to) {
     const api = await backend();
@@ -518,6 +541,7 @@ function main() {
         $('custom-save').textContent = button.hasAttribute('data-custom-new') ? 'Kaydet ve ekle' : 'Kaydet';
         $('custom-error').textContent = ''; openDialog($('custom-dialog')); $('custom-input').focus({ preventScroll: true });
       } else if (button.dataset.delete) remove(button.dataset.delete);
+      else if (button.dataset.editEntry) openRecordEditor(button.dataset.editEntry);
       else if (button.dataset.close) closeDialog($(button.dataset.close));
       else if (button.dataset.historyDay) openHistory(button.dataset.historyDay);
       else if (button.dataset.notifications) await notifications(button.dataset.notifications === 'on');
@@ -535,6 +559,7 @@ function main() {
   $('settings-button').addEventListener('click', openSettings);
   $('together-button').addEventListener('click', openTogether);
   $('all-records').addEventListener('click', () => openHistory());
+  $('history-add').addEventListener('click', () => action(() => openRecordEditor()));
   $('history-previous').addEventListener('click', () => openHistory(shiftDay(historyDay, -1)));
   $('history-next').addEventListener('click', () => { if (historyDay < store.today()) openHistory(shiftDay(historyDay, 1)); });
   $('history-date').addEventListener('change', event => { if (/^\d{4}-\d\d-\d\d$/.test(event.target.value) && event.target.value <= store.today()) openHistory(event.target.value); });
@@ -542,6 +567,20 @@ function main() {
     if (event.target.id === 'pair-history-date' && /^\d{4}-\d\d-\d\d$/.test(event.target.value) && event.target.value <= store.today()) {
       historyEnd = event.target.value; renderTogether(); refreshTogether();
     }
+  });
+  $('record-form').addEventListener('submit', event => {
+    event.preventDefault();
+    if ($('record-dialog').classList.contains('is-closing')) return;
+    try {
+      const amount = amountValue($('record-amount').value, 1, 10000);
+      const id = $('record-form').dataset.entryId;
+      if (id) {
+        const previous = store.edit(id, amount);
+        showToast('Kayıt güncellendi', () => { store.edit(id, previous.amount); requestSync(); });
+        requestSync();
+      } else add(amount, $('record-form').dataset.day);
+      closeDialog($('record-dialog'));
+    } catch (error) { $('record-error').textContent = errorText(error); }
   });
   $('custom-form').addEventListener('submit', event => {
     event.preventDefault();
@@ -574,6 +613,10 @@ function main() {
       if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) closeDialog(dialog);
     });
     dialog.addEventListener('close', () => {
+      if (dialog.contains($('toast'))) {
+        const active = Array.from(document.querySelectorAll('dialog[open]')).at(-1);
+        (active || document.body).append($('toast'));
+      }
       if (!document.querySelector('dialog[open]')) document.documentElement.classList.remove('modal-open');
       if (dialog.id === 'together-dialog') clearInterval(refreshTimer);
       if (dialog.id === 'recovery-dialog') { recoveryCode = ''; $('recovery-code').value = ''; }
@@ -584,7 +627,7 @@ function main() {
     const today = store.today();
     if (lastDay !== today) {
       if (historyEnd === lastDay) historyEnd = today;
-      if (historyDay === lastDay) historyDay = today;
+      if (historyDay === lastDay && !$('history-dialog').open) historyDay = today;
       lastDay = today;
     }
     render(); requestSync();

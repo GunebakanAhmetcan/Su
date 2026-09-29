@@ -19,6 +19,14 @@ export function amountValue(value, min, max) {
   return Number(text);
 }
 
+export function entryDay(value, today) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('Geçerli bir gün seç.');
+  const parsed = new Date(value + 'T12:00:00');
+  if (!Number.isFinite(parsed.getTime()) || dayKey(parsed) !== value || value < '0001-01-01') throw new Error('Geçerli bir gün seç.');
+  if (value > today) throw new Error('Gelecek bir güne kayıt eklenemez.');
+  return value;
+}
+
 function legacy(storage, key, fallback) {
   const raw = storage.getItem(key);
   if (!raw) return fallback;
@@ -99,16 +107,32 @@ export class WaterStore {
   entriesFor(day = this.today()) { return this.state.entries.filter(e => e.day === day).sort((a, b) => b.createdAt - a.createdAt); }
   total(day = this.today()) { return this.entriesFor(day).reduce((sum, e) => sum + e.amount, 0); }
 
-  add(amount) {
-    amount = amountValue(amount, 1, 3000);
+  add(amount, selectedDay) {
+    amount = amountValue(amount, 1, 10000);
+    const createdAt = this.now();
+    const today = dayKey(new Date(createdAt));
+    const day = entryDay(selectedDay ?? today, today);
     const clientId = this.id();
     this.commit(state => {
-      const createdAt = this.now();
-      const entry = { id: clientId, clientId, amount, createdAt, day: dayKey(new Date(createdAt)), revision: this.revision(state), synced: false, remoteId: null };
+      const entry = { id: clientId, clientId, amount, createdAt, day, revision: this.revision(state), synced: false, remoteId: null };
       state.entries.push(entry);
       state.outbox[clientId] = { kind: 'upsert', revision: entry.revision, entry: { ...entry } };
     });
     return clientId;
+  }
+
+  edit(clientId, amount) {
+    amount = amountValue(amount, 1, 10000);
+    const previous = this.state.entries.find(entry => entry.clientId === clientId);
+    if (!previous) throw new Error('Bu kayıt artık bulunmuyor. Geçmişi yeniden aç.');
+    this.commit(state => {
+      const entry = state.entries.find(item => item.clientId === clientId);
+      entry.amount = amount;
+      entry.revision = this.revision(state);
+      entry.synced = false;
+      state.outbox[clientId] = { kind: 'upsert', revision: entry.revision, entry: { ...entry } };
+    });
+    return { ...previous };
   }
 
   remove(clientId) {

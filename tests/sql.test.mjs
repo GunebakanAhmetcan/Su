@@ -34,6 +34,12 @@ test('PostgreSQL migration, RLS, idempotent sync, recovery and notification leas
   assert.equal((await db.query('select * from public.water_entries')).rows.length,0);
   await sync([change('upsert',4)]);
   assert.equal((await db.query("select * from public.get_pair_entries('2026-09-13','2026-09-13','Europe/Istanbul')")).rows[0].amount,375);
+  const oldId = (await db.query('select id from public.water_entries')).rows[0].id;
+  await sync([{ ...change('upsert', 5), amount: 4500, recorded_at: '2026-09-14T00:05:00Z', recorded_day: '2026-09-12' }]);
+  await sync([{ ...change('upsert', 6), amount: 2200, recorded_at: '2026-09-14T00:05:00Z', recorded_day: '2026-09-12' }]);
+  const historical = (await db.query("select * from public.get_pair_entries('2026-09-12','2026-09-12','Europe/Berlin')")).rows;
+  assert.equal(historical.length, 1); assert.equal(historical[0].amount, 2200); assert.equal(historical[0].id, oldId);
+  assert.equal((await db.query("select * from public.get_pair_entries('2026-09-14','2026-09-14','Europe/Istanbul')")).rows.length, 0);
   await assert.rejects(db.query('select * from private.recovery_codes'),/permission denied/);
   await assert.rejects(db.query('select * from public.claim_push_job()'),/permission denied/);
   await login(users[1]);

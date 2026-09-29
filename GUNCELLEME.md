@@ -1,4 +1,15 @@
-# Su v5 — mevcut uygulamayı güncelle
+# Su v5.1 — mevcut uygulamayı güncelle
+
+## V5 kuruluysa yalnızca bu bölümü uygula
+
+1. ZIP'i çıkar; içindeki dosya ve klasörleri mevcut GitHub reponun ana dizinine yükle ve commit et.
+2. Netlify yayınının Published olmasını bekle.
+3. Her iki telefonda uygulamayı aç; Ayarlar → Güncellemeyi aç seçeneği görünürse dokun. Görünmüyorsa uygulamayı ve aynı adresin açık Safari sekmelerini kapatıp yeniden aç.
+4. Kayıtlar → Geçmişi aç → istediğin günü seç → Bu güne su ekle. Bir günün eksik miktarını tek seferde girebilirsin. Mevcut kaydın yanındaki kalem miktarı değiştirir; Geri al son işlemi geri çevirir.
+
+**V5 SQL güncellemesi zaten yapıldıysa yeniden SQL çalıştırma.** Mevcut kayıt, eşleşme, webhook ve anahtarlar korunur. Uygulamayı kaldırma veya site verilerini silme. Çevrimdışı yapılan geçmiş düzenlemeleri bağlantı geldiğinde uygulama açılınca eşitlenir.
+
+## Hâlâ v4 kullanıyorsan aşağıdaki ilk geçiş adımlarını uygula
 
 Mevcut Netlify ve Supabase projelerini kullan. Yeni site, yeni eşleşme veya yeni anahtar oluşturman gerekmiyor.
 
